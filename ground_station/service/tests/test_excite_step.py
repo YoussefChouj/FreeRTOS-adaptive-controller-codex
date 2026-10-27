@@ -73,6 +73,16 @@ def test_excite_refuses_when_not_at_the_hover_point():
     assert drone.sysid_starts == 0
 
 
+def test_excite_aborts_when_sysid_refuses_the_start(monkeypatch):
+    # 10-28 pos-z/pos-xy: CMD 0x14 APPLIED, SysID_Start refused silently, the step said ok with nothing run
+    drone, _, deps = _rig()
+    scn = parse_scenario(_scn([{"hold": {"s": 5}}, {"excite": EXCITE}]))
+    monkeypatch.setattr(ex, "ALT_BAND_M", (2.0, 3.0))   # the fake's altitude guard now refuses the 0.5 m hover
+    out = fly_scenario(scn, deps)
+    assert out.aborted and out.landed and "SysID refused the start" in out.decision.reason
+    assert drone.sysid_starts == 0
+
+
 def test_operator_land_mid_excite_aborts_sysid():
     drone, clock, deps = _rig()
     _hook_step(deps, clock, 14.0, lambda: deps.control.request("land"))

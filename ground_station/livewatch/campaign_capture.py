@@ -141,6 +141,9 @@ VELOCITY_LOOPS: tuple[str, ...] = (
     "g_of_hold_active",   # RC ch6: 0 = angle mode, the loops above never reach tilt (10-06 f01)
     "Ctrler.locxPID.U", "Ctrler.locyPID.U", "Ctrler.pitchPID.Des", "Ctrler.rollPID.Des",
 )
+# SysID runs (API/sysid.c): the excitation itself and the FSM state. Targets 3/4 add the excitation to the setpoint and
+# take it off again within the tick, so Des never shows it (10-28 pos-z/pos-xy flights: "no multisine in Des").
+SYSID: tuple[str, ...] = ("sysid_u", "sysid_state")
 # Quality, the module's own height (it scales flow to velocity) and the frame counter (stale vs live): 10-06 f05
 # drifted ~1 m +x while the logged flow summed to ~7 cm, and these were missing to tell why.
 OPTICAL_FLOW: tuple[str, ...] = ("ano_of.of2_dx_fix", "ano_of.of2_dy_fix", "ano_of.of_quality", "ano_of.of_alt_cm",
@@ -250,6 +253,7 @@ LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "mrac_3l": MRAC_3L,
     "mrac_theta": MRAC_THETA,
     "velocity_loops": VELOCITY_LOOPS,
+    "sysid": SYSID,
     "optical_flow": OPTICAL_FLOW,
     "takeoff_gate": TAKEOFF_GATE,
     "estimator_truth": ESTIMATOR_TRUTH,

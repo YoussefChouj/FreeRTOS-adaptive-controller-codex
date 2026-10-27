@@ -3,7 +3,7 @@
 # Ground analysis: python -m ground_station.autotune.cli <session> --loop pos --axis z. All values PROPOSED.
 campaign lab-d-sysid-pos-z
 rate 200
-log velocity_loops camera_fusion
+log velocity_loops camera_fusion sysid
 slow 25 thrust_model xy_ctrl ekf_states estimator_truth optical_flow takeoff_gate nn4 drift_nn mrac_3l mrac_theta mrac_shadow
 set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
 takeoff 0.5 mrac_injection=0

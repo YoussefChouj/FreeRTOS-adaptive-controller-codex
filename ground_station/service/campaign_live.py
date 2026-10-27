@@ -42,7 +42,8 @@ WFB_STATUS_SYMS = tuple(f"g_wfb_status.{f}" for f in WFB_STATUS_FIELDS)
 GATE_SYMS = {"motor_idle": "status.motor_idle", "sbus_lost": "status.sbus_lost", "rc_authority": "status.rc_authority",
              "arm": "status.arm",
              "traj_status": "traj_status", "traj_active": "traj_active",
-             "exp_active": "exp_active", "kp_active": "kp_active", "vp_active": "vp_active", "lim_active": "lim_active"}
+             "exp_active": "exp_active", "kp_active": "kp_active", "vp_active": "vp_active", "lim_active": "lim_active",
+             "sysid_state": "sysid_state"}
 # wfb_err_t (API/wfb_types.h). A wfb reject carries this number in the reason byte, which the transaction
 # layer labels with its own RejectReason names (1 reads as BAD_VERSION): relabel it here.
 WFB_ERR_NAMES = {1: "STATE", 2: "RANGE", 3: "COUNT", 4: "CRC", 5: "TIME", 6: "BOUNDS", 7: "ENDPOINT",

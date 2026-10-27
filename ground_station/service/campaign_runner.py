@@ -35,6 +35,7 @@ BATTERY_GRACE_S = 5.0  # PROPOSED: wait this long for real_voltage to stream (80
 # EXCITE_ORIGIN_WAIT_S of the step start. PROPOSED, not measured.
 EXCITE_ORIGIN_TOL_M = 0.15
 EXCITE_ORIGIN_WAIT_S = 5.0
+SYSID_START_READBACK_S = 1.5   # sysid_state leaves IDLE on the first SysID_Update tick; 1.5 s covers stream lag
 
 # preset: traj_status (TASK/AutoflyTask.c) 1 running, 2 done, 3 aborted (takeover/landing), 4 stopped and back,
 # >= 0xE0 traj_go refused (0xE0 not flying, 0xE1 busy, 0xE2 bad traj_id, 0xEE range/too fast, 0xEF fence).
@@ -541,8 +542,17 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                     decision = AbortDecision(level=1, reason=f"excite: sysid command refused: {why}")
                     ok = False
                 else:
-                    # Abort after the window is a no-op if SysID already finished (sysid.c:226); then wait RECOVERY.
                     t_on = deps.clock()
+                    # SysID_Start's refusal (altitude band, FlyMode, armed: sysid.c:286) is silent and the command is
+                    # still APPLIED, so read the state back (10-28 pos-z/pos-xy said "excite ok" with nothing run).
+                    ok = wait(lambda: deps.status().get("sysid_state", ex.STATE_RAMP_IN) != ex.STATE_IDLE
+                              or deps.clock() - t_on >= SYSID_START_READBACK_S, "excite start")
+                    if ok and deps.status().get("sysid_state", ex.STATE_RAMP_IN) == ex.STATE_IDLE:
+                        decision = AbortDecision(level=1, reason="excite: SysID refused the start (sysid_state stayed "
+                                                                 "IDLE: altitude band 0.30-1.50 m, FlyMode SDK, armed)")
+                        ok = False
+                if ok:
+                    # Abort after the window is a no-op if SysID already finished (sysid.c:226); then wait RECOVERY.
                     ok = wait(lambda: deps.clock() - t_on >= ex.active_s(a["duration_s"]), "excite")
                     if ok:
                         deps.client._send_cmd(ex.CMD_SYSID, ex.IDX_START, 0.0)

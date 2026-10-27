@@ -29,6 +29,7 @@ RATE_PID: Mapping[str, str] = {"roll": "gyroxPID", "pitch": "gyroyPID", "yaw": "
 ANGLE_PID: Mapping[str, str] = {"roll": "rollPID", "pitch": "pitchPID", "yaw": "yawPID"}
 VEL_PID: Mapping[str, str] = {"x": "locxsPID", "y": "locysPID", "z": "Z_ratePID",
                               "pitch": "locxsPID", "roll": "locysPID"}
+SYSID_U = "sysid_u"   # API/sysid.c: this tick's excitation, the position reference's missing part
 POS_PID: Mapping[str, str] = {"x": "locxPID", "y": "locyPID", "z": "Z_posPID",
                               "pitch": "locxPID", "roll": "locyPID"}
 LOOP_PID: Mapping[str, Mapping[str, str]] = {
@@ -203,6 +204,14 @@ def find_start(series: Series, axis: str, excite: Mapping[str, Any],
         raise IdError(f"invalid sample rate {fs} Hz for {des}")
     grid = np.arange(tr[0], tr[-1], 1.0 / fs)
     r, x = np.interp(grid, tr, vr), np.interp(grid, tx, vx)
+    if loop == "pos":
+        # Target 4 adds the excitation to the setpoint and takes it off again in the same tick
+        # (TASK/StabilizerTask.c), so Des never shows it: the reference is Des + sysid_u.
+        if SYSID_U not in series:
+            raise IdError(f"{des} never carries a position excitation (added and removed within the tick): "
+                          f"log {SYSID_U} (firmware 2026-10-28 or later) to identify the position loop")
+        tu, vu = clean_series(tb(series[SYSID_U][0]), series[SYSID_U][1], SYSID_U)
+        r = r + np.interp(grid, tu, vu)
     tmpl = ex.dither(np.arange(0.0, ex.active_s(excite["duration_s"]), 1.0 / fs), excite["signal"], excite["f0"],
                      excite["f1"], excite["amp"], excite["duration_s"])
     n_ma = max(1, int(2.0 * fs))

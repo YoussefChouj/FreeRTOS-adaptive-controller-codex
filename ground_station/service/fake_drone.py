@@ -1127,4 +1127,5 @@ class FakeDrone:
             "prog_err_seg": float(self._prog_err_seg),
             "traj_status": float(self._traj_status),
             "traj_active": float(self._traj_active),
+            "sysid_state": float(self.sysid_state),
         }

@@ -637,8 +637,8 @@ def test_14_determinism() -> None:
 
 
 def test_15_status_fields_and_types() -> None:
-    """status() has the 16 keys of interfaces.md section 2 plus the Keil preset pair (traj_status, traj_active, which
-    live_status adds from the stream), and every value is a float."""
+    """status() has the 16 keys of interfaces.md section 2 plus the Keil preset pair (traj_status, traj_active) and
+    sysid_state, which live_status adds from the stream, and every value is a float."""
     drone = FakeDrone()
     st = drone.status()
     expected_keys = {
@@ -660,9 +660,10 @@ def test_15_status_fields_and_types() -> None:
         "prog_err_seg",
         "traj_status",
         "traj_active",
+        "sysid_state",
     }
     assert set(st.keys()) == expected_keys
-    assert len(st) == 18
+    assert len(st) == 19
     for k, v in st.items():
         assert isinstance(v, float), f"field {k} is not a float: {type(v)}"
 

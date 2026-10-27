@@ -136,6 +136,10 @@ static const sysid_target_limits_t s_outer_limits[3] = {   /* indexed by (sysid_
 
 // ---- Module state -------------------------------------------------------------------
 volatile uint8_t sysid_target = 0;   // VAR_WRITE 55: 0 rate, 1 torque, 2 angle, 3 vel, 4 pos
+volatile float   sysid_u = 0.0f;     // this tick's excitation (s_rate_cmd, target units), streamable: targets 3/4 add it to
+                                     // the setpoint and take it off again in the same tick, so Ctrler.*.Des never shows it
+volatile uint8_t sysid_state = 0;    // SysID_State_e mirror, streamable: the GS reads it back after a start (Start's
+                                     // refusal is otherwise silent)
 static uint8_t s_target;             // sysid_target latched at SysID_Start (a write while not IDLE is refused BUSY)
 static SysID_State_e s_state = SYSID_IDLE;
 static SysID_Axis_e  s_axis;
@@ -353,7 +357,16 @@ void SysID_Abort(void)
     sysid_enter_recovery();
 }
 
+static void sysid_step(void);
+
 void SysID_Update(void)
+{
+    sysid_step();
+    sysid_u = s_rate_cmd;
+    sysid_state = (uint8_t)s_state;
+}
+
+static void sysid_step(void)
 {
     float env, raw;
 

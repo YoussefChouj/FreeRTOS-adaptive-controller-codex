@@ -78,6 +78,8 @@ float SysID_GetRateSetpoint(SysID_Axis_e axis);
 // 2 = angle setpoint (deg, pitch/roll). 3 = velocity setpoint (cm/s for X/Y, m/s for Z).
 // 4 = position setpoint (cm for X/Y, m for Z).
 extern volatile uint8_t sysid_target;
+extern volatile float   sysid_u;       // this tick's excitation (streamable; Des never shows a target 3/4 one)
+extern volatile uint8_t sysid_state;   // SysID_State_e mirror (streamable; 0 = IDLE)
 
 // d for a target-1 run (mixer units): the excitation on the run's axis while RAMP_IN/RUNNING/RAMP_OUT and
 // flying != 0 (flight_phase FLYING), clamped to the SYSID_TORQUE_ROW amp_max; 0 otherwise (target 0, other
