@@ -274,7 +274,7 @@ def test_log_groups_are_disjoint_from_needed_and_each_other():
     # purpose; plan_capture records a variable once.
     assert set(cc.LOG_GROUPS["mrac_theta"]) <= set(cc.LOG_GROUPS["mrac_shadow"])
     # z_cf intentionally combines range, thrust and estimator signals for one diagnostic capture.
-    group_vars = [v for name, g in cc.LOG_GROUPS.items() if name not in ("nn4", "mrac_theta", "z_cf", "z_pid_gains") for v in g]
+    group_vars = [v for name, g in cc.LOG_GROUPS.items() if name not in ("nn4", "mrac_theta", "z_cf", "z_cf_legacy", "z_pid_gains") for v in g]
     assert len(set(group_vars)) == len(group_vars)
     assert not set(group_vars) & set(NEEDED)
     assert cc.LOG_GROUPS["mrac_shadow"] == OPTIONAL
@@ -428,3 +428,27 @@ def test_subscribe_steps_match_the_agent_subscribe_action():
     assert [s["action"] for s in steps] == ["subscribe", "subscribe"]
     assert [(s["args"]["slot"], s["args"]["divider"]) for s in steps] == [(0, 4), (1, 4)]
     assert [s["args"]["ranges"] for s in steps] == [s["vars"] for s in plan["slots"]]
+
+
+def test_c2_capture_contains_requested_chain_and_effective_flags():
+    plan = cc.plan_capture({"rate_hz": 200, "groups": ["z_cf"], "slow": ["z_pid_gains", "takeoff_gate"]})
+    fields = set(plan["slots"][0]["vars"])
+    required = {"ano_of.of_alt_cm", "ano_of.alt_update_cnt", "ano_of.of2_h", "Throttle_out",
+                "DroneStatus.ARM_Status", "Lin_Acc_X_body", "Lin_Acc_Y_body", "Lin_Acc_Z_body",
+                "alt_cf.sample_mode", "alt_cf.delay_ticks", "alt_cf.spread_mode", "g_alt_cf_disarmed_test"}
+    required.update(f"alt_cf.{f}" for f in ("h", "vz", "e", "b_az", "a_up"))
+    required.update(f"Ctrler.{loop}.{f}" for loop in ("Z_posPID", "Z_ratePID") for f in ("Des", "FB", "U"))
+    assert required <= fields
+    assert len(plan["slots"]) == 1 and plan["slots"][0]["slot"] == 0
+    assert plan["slots"][0]["hz"] == 200 and plan["slow_hz"] == 200
+
+
+def test_c2_legacy_card_keeps_old_firmware_baseline_capture():
+    from ground_station.service.fly_file import compile_fly
+    card = Path(__file__).resolve().parents[2] / "service/campaigns/lab_z_cf_hover_legacy.fly"
+    data, _ = compile_fly(card.read_text(encoding="utf-8"), str(card))
+    plan = cc.plan_capture(data["experiments"][0]["log_plan"])
+    fields = set(plan["slots"][0]["vars"])
+    assert set(cc.Z_CF_LEGACY) <= fields
+    assert not (set(cc.Z_CF) - set(cc.Z_CF_LEGACY)) & fields
+    assert plan["single_slot"] and len(fields) == 102

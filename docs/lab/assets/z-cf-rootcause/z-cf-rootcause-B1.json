@@ -1,0 +1,326 @@
+[
+  {
+    "window_s": [
+      9.52,
+      37.52
+    ],
+    "frames": 701,
+    "fs_hz": 25.000000000000533,
+    "max_gap_s": 0.04000000000000625,
+    "mode": [
+      0.0
+    ],
+    "raw_tof": {
+      "peak_hz": 0.10699001426533751,
+      "period_s": 9.346666666666469,
+      "lower_search_boundary": true,
+      "full_positive_band_peak_period_s": 9.346666666666469,
+      "mean_only_detrend_peak_period_s": 9.346666666666469,
+      "local_peaks_hz": [
+        0.10699001426533751,
+        0.3566333808844584,
+        0.42796005706135004
+      ],
+      "fast_band_peak_hz": 0.6062767475035792,
+      "slow_band_power_fraction": 0.9807355287468323,
+      "sine_peak_m": 0.05841127088671925,
+      "std_m": 0.06246633115035638,
+      "p05_m": 0.69,
+      "p95_m": 0.91,
+      "min_m": 0.61,
+      "max_m": 0.93
+    },
+    "cf_h": {
+      "peak_hz": 0.10699001426533751,
+      "period_s": 9.346666666666469,
+      "lower_search_boundary": true,
+      "full_positive_band_peak_period_s": 9.346666666666469,
+      "mean_only_detrend_peak_period_s": 9.346666666666469,
+      "local_peaks_hz": [
+        0.10699001426533751,
+        0.3566333808844584,
+        0.42796005706135004
+      ],
+      "fast_band_peak_hz": 0.6062767475035792,
+      "slow_band_power_fraction": 0.9765102523048773,
+      "sine_peak_m": 0.055896279178209905,
+      "std_m": 0.06036536298209238,
+      "p05_m": 0.685354,
+      "p95_m": 0.904484,
+      "min_m": 0.613267,
+      "max_m": 0.926878
+    },
+    "h_lag": {
+      "lag_s": 0.03999999999999915,
+      "r": 0.9984746882497664,
+      "boundary": false
+    },
+    "vz_lag": {
+      "lag_s": 0.11999999999999744,
+      "r": 0.560134996509554,
+      "boundary": false
+    },
+    "bias_throttle_raw_r": 0.2582298310179184,
+    "bias_throttle_detrended_r": 0.17193537976014295,
+    "bias_range_mps2": [
+      0.070547,
+      0.272303
+    ],
+    "tof_peak_period_trim_sensitivity_s": {
+      "0": 9.346666666666469,
+      "2": 8.013333333333161
+    },
+    "correction_rate_hz": 66.92857142857142,
+    "alt_update_cnt_rate_hz": 66.96428571428571,
+    "tof_value_change_rate_hz": 7.285714285714285,
+    "campaign": "z-cf-hover_20261026-231115",
+    "session": "20261026-231021-z-cf-hover-001_f01_z_cf_hover",
+    "campaign_hold_s": [
+      8.515,
+      38.547
+    ]
+  },
+  {
+    "window_s": [
+      8.92,
+      36.92
+    ],
+    "frames": 701,
+    "fs_hz": 25.000000000000533,
+    "max_gap_s": 0.04000000000000625,
+    "mode": [
+      1.0
+    ],
+    "raw_tof": {
+      "peak_hz": 0.2853067047075667,
+      "period_s": 3.5049999999999253,
+      "lower_search_boundary": false,
+      "full_positive_band_peak_period_s": 3.5049999999999253,
+      "mean_only_detrend_peak_period_s": 3.5049999999999253,
+      "local_peaks_hz": [
+        0.2853067047075667,
+        0.10699001426533751,
+        0.5349500713266876
+      ],
+      "fast_band_peak_hz": 0.5349500713266876,
+      "slow_band_power_fraction": 0.9344380147886124,
+      "sine_peak_m": 0.05239005495988233,
+      "std_m": 0.06614750885229782,
+      "p05_m": 0.7,
+      "p95_m": 0.91,
+      "min_m": 0.63,
+      "max_m": 1.02
+    },
+    "cf_h": {
+      "peak_hz": 0.2853067047075667,
+      "period_s": 3.5049999999999253,
+      "lower_search_boundary": false,
+      "full_positive_band_peak_period_s": 3.5049999999999253,
+      "mean_only_detrend_peak_period_s": 3.5049999999999253,
+      "local_peaks_hz": [
+        0.2853067047075667,
+        0.10699001426533751,
+        0.5349500713266876
+      ],
+      "fast_band_peak_hz": 0.5349500713266876,
+      "slow_band_power_fraction": 0.916546545504954,
+      "sine_peak_m": 0.048967694981379095,
+      "std_m": 0.06120682705335189,
+      "p05_m": 0.710227,
+      "p95_m": 0.901602,
+      "min_m": 0.648324,
+      "max_m": 1.001277
+    },
+    "h_lag": {
+      "lag_s": 0.1599999999999966,
+      "r": 0.9957061026470504,
+      "boundary": false
+    },
+    "vz_lag": {
+      "lag_s": 0.1599999999999966,
+      "r": 0.7900149110894181,
+      "boundary": false
+    },
+    "bias_throttle_raw_r": 0.4130669576046853,
+    "bias_throttle_detrended_r": 0.4120288105661016,
+    "bias_range_mps2": [
+      0.053419,
+      0.189513
+    ],
+    "tof_peak_period_trim_sensitivity_s": {
+      "0": 3.5049999999999253,
+      "2": 3.4342857142856413
+    },
+    "correction_rate_hz": 69.0,
+    "alt_update_cnt_rate_hz": 69.14285714285714,
+    "tof_value_change_rate_hz": 10.321428571428571,
+    "campaign": "z-cf-hover_20261026-231338",
+    "session": "20261026-231246-z-cf-hover-001_f01_z_cf_hover",
+    "campaign_hold_s": [
+      7.906,
+      37.937
+    ]
+  },
+  {
+    "window_s": [
+      11.84,
+      39.84
+    ],
+    "frames": 701,
+    "fs_hz": 25.000000000000533,
+    "max_gap_s": 0.04000000000000625,
+    "mode": [
+      1.0
+    ],
+    "raw_tof": {
+      "peak_hz": 0.21398002853067502,
+      "period_s": 4.673333333333234,
+      "lower_search_boundary": false,
+      "full_positive_band_peak_period_s": 4.673333333333234,
+      "mean_only_detrend_peak_period_s": 4.673333333333234,
+      "local_peaks_hz": [
+        0.21398002853067502,
+        0.10699001426533751,
+        0.3566333808844584
+      ],
+      "fast_band_peak_hz": 0.5706134094151334,
+      "slow_band_power_fraction": 0.93017915861347,
+      "sine_peak_m": 0.03298010252132424,
+      "std_m": 0.05413203212667529,
+      "p05_m": 0.72,
+      "p95_m": 0.88,
+      "min_m": 0.7,
+      "max_m": 0.98
+    },
+    "cf_h": {
+      "peak_hz": 0.21398002853067502,
+      "period_s": 4.673333333333234,
+      "lower_search_boundary": false,
+      "full_positive_band_peak_period_s": 28.039999999999402,
+      "mean_only_detrend_peak_period_s": 4.673333333333234,
+      "local_peaks_hz": [
+        0.21398002853067502,
+        0.10699001426533751,
+        0.3566333808844584
+      ],
+      "fast_band_peak_hz": 0.5706134094151334,
+      "slow_band_power_fraction": 0.9054050946302289,
+      "sine_peak_m": 0.027721556127392008,
+      "std_m": 0.048662578835366795,
+      "p05_m": 0.726928,
+      "p95_m": 0.877932,
+      "min_m": 0.706468,
+      "max_m": 0.959526
+    },
+    "h_lag": {
+      "lag_s": 0.1599999999999966,
+      "r": 0.990528730054742,
+      "boundary": false
+    },
+    "vz_lag": {
+      "lag_s": 0.11999999999999744,
+      "r": 0.5428757370366398,
+      "boundary": false
+    },
+    "bias_throttle_raw_r": -0.07504911281783157,
+    "bias_throttle_detrended_r": 0.06889203345357897,
+    "bias_range_mps2": [
+      0.093527,
+      0.21859
+    ],
+    "tof_peak_period_trim_sensitivity_s": {
+      "0": 4.673333333333234,
+      "2": 8.013333333333161
+    },
+    "correction_rate_hz": 70.64285714285714,
+    "alt_update_cnt_rate_hz": 70.82142857142857,
+    "tof_value_change_rate_hz": 8.749999999999998,
+    "campaign": "z-cf-hover_20261026-231601",
+    "session": "20261026-231506-z-cf-hover-001_f01_z_cf_hover",
+    "campaign_hold_s": [
+      10.813,
+      40.86
+    ]
+  },
+  {
+    "window_s": [
+      9.32,
+      37.36
+    ],
+    "frames": 702,
+    "fs_hz": 25.000000000000533,
+    "max_gap_s": 0.04000000000000625,
+    "mode": [
+      0.0
+    ],
+    "raw_tof": {
+      "peak_hz": 0.10683760683760911,
+      "period_s": 9.3599999999998,
+      "lower_search_boundary": true,
+      "full_positive_band_peak_period_s": 9.3599999999998,
+      "mean_only_detrend_peak_period_s": 9.3599999999998,
+      "local_peaks_hz": [
+        0.10683760683760911,
+        0.6054131054131183,
+        0.3205128205128273
+      ],
+      "fast_band_peak_hz": 0.6054131054131183,
+      "slow_band_power_fraction": 0.904530475381713,
+      "sine_peak_m": 0.04391228244178306,
+      "std_m": 0.04915514373507233,
+      "p05_m": 0.7,
+      "p95_m": 0.88,
+      "min_m": 0.68,
+      "max_m": 0.91
+    },
+    "cf_h": {
+      "peak_hz": 0.10683760683760911,
+      "period_s": 9.3599999999998,
+      "lower_search_boundary": true,
+      "full_positive_band_peak_period_s": 9.3599999999998,
+      "mean_only_detrend_peak_period_s": 9.3599999999998,
+      "local_peaks_hz": [
+        0.10683760683760911,
+        0.6054131054131183,
+        0.3205128205128273
+      ],
+      "fast_band_peak_hz": 0.6054131054131183,
+      "slow_band_power_fraction": 0.8821716655182926,
+      "sine_peak_m": 0.042628979321706194,
+      "std_m": 0.04807723266997037,
+      "p05_m": 0.7035235000000001,
+      "p95_m": 0.8805678499999999,
+      "min_m": 0.687213,
+      "max_m": 0.895053
+    },
+    "h_lag": {
+      "lag_s": 0.03999999999999915,
+      "r": 0.9959367107432188,
+      "boundary": false
+    },
+    "vz_lag": {
+      "lag_s": 0.19999999999999574,
+      "r": 0.6870226080875855,
+      "boundary": false
+    },
+    "bias_throttle_raw_r": 0.5591228122166088,
+    "bias_throttle_detrended_r": 0.45274936118427744,
+    "bias_range_mps2": [
+      0.064087,
+      0.217812
+    ],
+    "tof_peak_period_trim_sensitivity_s": {
+      "0": 9.3599999999998,
+      "2": 8.026666666666497
+    },
+    "correction_rate_hz": 70.86305278174038,
+    "alt_update_cnt_rate_hz": 70.82738944365192,
+    "tof_value_change_rate_hz": 8.309557774607704,
+    "campaign": "z-cf-hover_20261026-231738",
+    "session": "20261026-231646-z-cf-hover-001_f01_z_cf_hover",
+    "campaign_hold_s": [
+      8.313,
+      38.375
+    ]
+  }
+]

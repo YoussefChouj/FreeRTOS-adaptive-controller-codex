@@ -20,6 +20,7 @@ def test_recovers_half_gain_and_delay_at_07_hz():
     omega, delay = 2 * np.pi * 0.7, 0.15
     values = _fields(t)
     values["ano_of.of2_h"] = 0.8 + 0.1 * np.sin(omega * t)
+    values["ano_of.of_alt_cm"] = 100 * values["ano_of.of2_h"]
     values["alt_cf.h"] = values["ano_of.of2_h"].copy()
     values["alt_cf.vz"] = 0.5 * 0.1 * omega * np.cos(omega * (t - delay))
     values["alt_cf.a_up"] = -0.1 * omega ** 2 * np.sin(omega * t)
@@ -43,6 +44,8 @@ def _firmware_capture(mode):
     f = np.float32
     t = np.arange(0, 30, 0.005)
     values = _fields(t)
+    values["alt_cf.delay_ticks"] = np.zeros(len(t))
+    values["alt_cf.spread_mode"] = np.zeros(len(t))
     h, v, b = f(0.8), f(0), f(0.02)
     n_corr, sensor_count, steps = (1 << 32) - 11, 250, 0
     last_dt, y_corr, error = f(0.005), f(0.8), f(0)
@@ -125,5 +128,126 @@ def test_missing_fields_are_actionable(tmp_path):
     t, values = _firmware_capture(0)
     del values["alt_cf.y_corr"]
     _write_csv(tmp_path / "telemetry.csv", t, values)
+    report = check.run(tmp_path)
+    assert "alt_cf.y_corr" in report["missing_fields"]
+    assert not report["replay_faithful"]
+    assert report["replay"] == {}
+    assert report["oscillation"]["tof"] is not None
+
+
+def test_synthetic_log_recovers_lag_period_and_bias_association(tmp_path):
+    """Offline signal fixture only: no ToF/vehicle dynamics or causal bias model."""
+    t = np.arange(0, 60, 0.04)
+    omega, delay = 2 * np.pi * 0.5, 0.16
+    values = {"xTickCount": np.rint(t * 1000),
+              "ano_of.of_alt_cm": 80 + 10 * np.sin(omega * t),
+              "alt_cf.h": 0.8 + 0.1 * np.sin(omega * (t - delay)),
+              "alt_cf.vz": 0.1 * omega * np.cos(omega * (t - delay)),
+              "alt_cf.b_az": 0.02 * np.sin(omega * t),
+              "Throttle_out": 400 + 20 * np.sin(omega * t)}
+    _write_csv(tmp_path / "telemetry.csv", t, values)
+    assert check.main([str(tmp_path)]) == 0
+    report = json.loads((tmp_path / "cf_vz_check.json").read_text())
+    assert report["lag"]["tof_to_h"]["lag_s"] == pytest.approx(delay, abs=0.04)
+    assert report["lag"]["d_tof_dt_to_vz"]["lag_s"] == pytest.approx(delay, abs=0.04)
+    for result in report["oscillation"].values():
+        assert result["period_s"] == pytest.approx(2.0, abs=0.05)
+    assert report["bias_throttle"]["raw_r"] == pytest.approx(1.0)
+    assert report["sampling_limits"]["sparse"]
+    assert report["sampling_limits"]["nyquist_hz"] == pytest.approx(12.5)
+    assert report["correction_steps"]["accepted_correction_tick_residuals"] is None
+    assert report["correction_steps"]["observed_inter_frame"]["alt_cf.h"]["count"] == len(t) - 1
+    assert not report["replay_faithful"]
+    assert (tmp_path / "cf_vz_check.png").stat().st_size > 1000
+
+
+def test_applied_corrections_subtract_predictor():
+    t, values = _firmware_capture(0)
+    report, _ = check.analyze(t, values)
+    applied = report["correction_steps"]["accepted_correction_tick_residuals"]
+    assert report["correction_steps"]["prediction_residuals_all_ticks"]["vz_mps"]["count"] == len(t) - 1
+    changed = check._increments(values["alt_cf.n_corr"], 32) == 1
+    innovation = values["alt_cf.e"][1:][changed]
+    assert applied["h_m"]["rms"] == pytest.approx(np.sqrt(np.mean((0.21 * innovation) ** 2)), abs=1e-7)
+    assert applied["vz_mps"]["rms"] == pytest.approx(np.sqrt(np.mean((0.45 * innovation) ** 2)), abs=1e-7)
+    assert applied["b_az_mps2"]["rms"] == pytest.approx(np.sqrt(np.mean((0.1 * innovation) ** 2)), abs=1e-7)
+
+
+def test_flat_signals_emit_null_metrics_and_strict_json(tmp_path):
+    t = np.arange(0, 8, 0.04)
+    values = {"xTickCount": np.rint(t * 1000), "ano_of.of2_h": np.full(len(t), 0.8),
+              "alt_cf.h": np.full(len(t), 0.8), "alt_cf.vz": np.zeros(len(t))}
+    _write_csv(tmp_path / "telemetry.csv", t, values)
+    report = check.run(tmp_path)
+    assert report["lag"]["tof_to_h"] is None
+    assert report["oscillation"]["tof"] is None
+    assert report["bias_throttle"] is None
+    assert report["correction_steps"]["accepted_correction_tick_residuals"] is None
+    json.dumps(report, allow_nan=False)
+
+
+def test_large_gap_is_not_interpolated():
+    t, values = _firmware_capture(0)
+    keep = (t < 5) | (t > 6)
+    with pytest.raises(ValueError, match="large gaps"):
+        check.analyze(t[keep], {key: value[keep] for key, value in values.items()})
+
+
+def test_missing_core_fields_still_fail(tmp_path):
+    t, values = _firmware_capture(0)
+    del values["alt_cf.vz"]
+    _write_csv(tmp_path / "telemetry.csv", t, values)
     with pytest.raises(ValueError, match="no complete CF fast-slot frames"):
         check.read_fast_slot(tmp_path)
+
+
+def test_intermittent_range_fields_cannot_form_one_trace(tmp_path):
+    t = np.arange(0, 4, 0.04)
+    values = {"xTickCount": np.rint(t * 1000), "alt_cf.h": np.full(len(t), 0.8),
+              "alt_cf.vz": np.zeros(len(t)),
+              "ano_of.of2_h": np.where(np.arange(len(t)) % 2, 0.8, np.nan),
+              "ano_of.of_alt_cm": np.where(np.arange(len(t)) % 2, np.nan, 80)}
+    _write_csv(tmp_path / "telemetry.csv", t, values)
+    with pytest.raises(ValueError, match="no consistently captured ToF"):
+        check.read_fast_slot(tmp_path)
+
+
+@pytest.mark.parametrize("field", check.REPLAY_MODE_FIELDS)
+def test_delay_or_spread_mode_cannot_claim_baseline_replay_faithful(field):
+    t, values = _firmware_capture(0)
+    # Exercise the selected fallback itself, with higher-priority evidence absent.
+    group = next(group for group in check.REPLAY_MODE_GROUPS if field in group)
+    for higher_priority in group[:group.index(field)]:
+        values.pop(higher_priority, None)
+    # Even a perfect baseline signal match cannot validate unsupported modes.
+    values[field] = np.ones(len(t))
+    report, _ = check.analyze(t, values)
+    assert report["replay"]["0"]["correlation_vz"] > 0.99
+    assert not report["replay_faithful"]
+    assert any(field in issue for issue in report["replay_issues"])
+
+
+def test_unlogged_effective_modes_are_explicit_assumptions():
+    t, values = _firmware_capture(0)
+    del values["alt_cf.delay_ticks"]
+    del values["alt_cf.spread_mode"]
+    report, _ = check.analyze(t, values)
+    assert not report["replay_faithful"]
+    assert report["baseline_matches_under_assumptions"]
+    assert report["replay_assumptions"]
+    assert "unverified" in report["estimator_status"]
+
+
+def test_effective_modes_take_precedence_over_pending_requests(tmp_path):
+    t, values = _firmware_capture(0)
+    values["alt_cf.delay_ticks"] = np.zeros(len(t))
+    values["alt_cf.spread_mode"] = np.zeros(len(t))
+    values["g_alt_tof_delay_ticks"] = np.ones(len(t))
+    values["g_alt_cf_spread_mode"] = np.ones(len(t))
+    _write_csv(tmp_path / "telemetry.csv", t, values)
+    captured_t, captured, _ = check.read_fast_slot(tmp_path)
+    report, _ = check.analyze(captured_t, captured)
+    assert report["replay_faithful"]
+    assert not report["baseline_matches_under_assumptions"]
+    assert not report["replay_assumptions"]
+    assert report["estimator_status"] == "replay validated on this capture"

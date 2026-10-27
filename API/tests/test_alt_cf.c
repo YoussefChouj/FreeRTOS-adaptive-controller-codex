@@ -1327,6 +1327,7 @@ static void test_u10_legacy_golden(void)
     int tick, phase = 0;
     int matches = 1;
     start_cf_rate_mode(ALT_CF_RATE_LEGACY);
+    s_alt_sample_mode = ALT_TOF_SAMPLE_LEGACY; /* frozen pre-A2 golden path */
     copy_legacy_state();
     for (tick = 1; tick <= 6000; tick++) {
         synthetic_input(tick, &phase, 70);
@@ -1408,6 +1409,7 @@ static void test_u13_next_arm_latch(void)
     int tick, phase = 0;
     int same = 1;
     start_cf_rate_mode(ALT_CF_RATE_LEGACY);
+    s_alt_sample_mode = ALT_TOF_SAMPLE_LEGACY; /* frozen pre-A2 golden path */
     copy_legacy_state();
     g_alt_cf_rate_mode = ALT_CF_RATE_SCALED;
     for (tick = 1; tick <= 400; tick++) {
@@ -1436,6 +1438,292 @@ static void test_u13_next_arm_latch(void)
     printf("U13: armed legacy trajectory unchanged=%d; pending mode applied only on next arm\n", same);
 }
 
+/* A1 host evidence: PROPOSED 20 Hz sensor, quantized ramp/sine, no plant. */
+static void test_a1_stale_arrival(void)
+{
+    int shape, tick, sample, events, stale;
+    unsigned corrections;
+    float expected;
+    for (shape = 0; shape < 2; shape++) {
+        reset_env(ALT_VZ_MODE_CF, 100U);
+        g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST; /* A2 is opt-in; default is legacy */
+        s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;  /* reset_env latched legacy while disarmed */
+        events = 0;
+        stale = 0;
+        for (tick = 1; tick <= 400; tick++) {
+            if (tick % 10 == 0) {
+                sample = tick / 10;
+                ano_of.of_alt_cm = (shape == 0) ? (uint32_t)(100 + sample)
+                    : (uint32_t)(100.0f + 8.0f * sinf(0.314159265f * (float)sample) + 0.5f);
+                ano_of.alt_update_cnt++;
+            }
+            corrections = (unsigned)alt_cf.n_corr;
+            Alt_UpdateFB();
+            if (tick % 10 == 0) {
+                expected = (float)ano_of.of_alt_cm * M_PER_CM;
+                if (alt_cf.n_corr > corrections && fabsf(alt_cf.y_corr - expected) < 1e-6f) stale++;
+                events++;
+                printf("A1 %s sample=%d newest=%.3f used=%.3f expected=%.3f\n",
+                       shape == 0 ? "ramp" : "sine", tick / 10,
+                       (double)((float)ano_of.of_alt_cm * M_PER_CM),
+                       (double)alt_cf.y_corr, (double)expected);
+            }
+        }
+        check_cond("A1 fixed: every arrival corrects with newest frame", stale == events);
+        printf("A1 fixed %s: newest-frame corrections %d/%d\n",
+               shape == 0 ? "ramp" : "sine", stale, events);
+    }
+}
+
+/* PROPOSED in-band outlier and armed latch stress, estimator only. */
+static void test_a2_outlier_and_latch(void)
+{
+    int tick;
+    uint32_t corrections;
+    reset_env(ALT_VZ_MODE_CF, 100U);
+    g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST; /* A2 is opt-in; default is legacy */
+    s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;  /* reset_env latched legacy while disarmed */
+    corrections = alt_cf.n_corr;
+    ano_of.of_alt_cm = 120U;
+    ano_of.alt_update_cnt++;
+    for (tick = 0; tick < 10; tick++) Alt_UpdateFB();
+    check_cond("A2 single held in-band outlier never corrects", alt_cf.n_corr == corrections);
+    check_cond("A2 outlier does not enter height", fabsf(ano_of.of2_h - 1.0f) < 1e-6f);
+    ano_of.of_alt_cm = 101U;
+    ano_of.alt_update_cnt++;
+    Alt_UpdateFB();
+    check_cond("A2 following newest valid frame corrects immediately", alt_cf.n_corr == corrections + 1U
+               && fabsf(alt_cf.y_corr - 1.01f) < 1e-6f);
+    g_alt_tof_sample_mode = ALT_TOF_SAMPLE_LEGACY;
+    Alt_UpdateFB();
+    check_cond("A2 armed pending sample flag cannot latch", s_alt_sample_mode == ALT_TOF_SAMPLE_NEWEST);
+    Flight_Control_Lock = 0U;
+    Alt_UpdateFB();
+    check_cond("A2 disarmed sample flag latches", s_alt_sample_mode == ALT_TOF_SAMPLE_LEGACY);
+}
+
+/* A3 fidelity: PROPOSED 40 ms sensor latency, 1 Hz / 8 cm sine,
+ * exact acceleration, cm quantization; no motors, vibration or control plant. */
+static void test_a3_delayed_sine(void)
+{
+    int mode, tick;
+    float h_phase[2], v_phase[2];
+    const float omega = 6.28318530718f;
+    for (mode = 0; mode < 2; mode++) {
+        double hs = 0.0, hc = 0.0, vs = 0.0, vc = 0.0;
+        reset_env(ALT_VZ_MODE_CF, 100U);
+        s_alt_delay_ticks = (uint8_t)(mode * 8);
+        for (tick = 1; tick <= 10000; tick++) {
+            float t = (float)tick * STAB_DT_S;
+            float sn = sinf(omega * t), cs = cosf(omega * t);
+            Lin_Acc_Z_body = -0.08f * omega * omega * sn / MG_TO_MPS2;
+            if (tick % 10 == 0) {
+                ano_of.of_alt_cm = (uint32_t)(100.0f + 8.0f * sinf(omega * (t - 0.04f)) + 0.5f);
+                ano_of.alt_update_cnt++;
+            }
+            Alt_UpdateFB();
+            if (tick > 6000) {
+                hs += (alt_cf.h - 1.0f) * sn;
+                hc += (alt_cf.h - 1.0f) * cs;
+                vs += alt_cf.vz * sn;
+                vc += alt_cf.vz * cs;
+            }
+        }
+        h_phase[mode] = (float)(atan2(hc, hs) * 180.0 / 3.141592653589793);
+        v_phase[mode] = (float)(atan2(-vs, vc) * 180.0 / 3.141592653589793);
+        printf("A3 PROPOSED 40ms sine d=%d: h phase=%.4f deg vz phase=%.4f deg (host)\n",
+               mode * 8, (double)h_phase[mode], (double)v_phase[mode]);
+    }
+    check_cond("A3 matched delay h phase error below 5 degrees", fabsf(h_phase[1]) < 5.0f);
+    check_cond("A3 matched delay vz phase error below 5 degrees", fabsf(v_phase[1]) < 5.0f);
+    check_cond("A3 matched delay improves h phase", fabsf(h_phase[1]) < fabsf(h_phase[0]));
+}
+
+static void test_a3_history_and_latch(void)
+{
+    int age, index, repeat;
+    float before[ALT_CF_HISTORY_LEN][3];
+    reset_env(ALT_VZ_MODE_CF, 100U);
+    for (age = 0; age < 40; age++) Alt_CfHistoryPush();
+    memcpy(before, s_alt_cf_history, sizeof(before));
+    for (repeat = 1; repeat <= 2; repeat++) {
+        Alt_CfHistoryCorrect(8U, 0.01f, 0.02f, 0.03f);
+        for (age = 0; age < (int)ALT_CF_HISTORY_LEN; age++) {
+            float t = (float)(8 - age) * STAB_DT_S;
+            float dh = (age <= 8) ? 0.01f + 0.02f * t - 0.5f * 0.03f * t * t : 0.0f;
+            float dv = (age <= 8) ? 0.02f - 0.03f * t : 0.0f;
+            float db = (age <= 8) ? 0.03f : 0.0f;
+            index = (s_alt_cf_head + ALT_CF_HISTORY_LEN - age) % ALT_CF_HISTORY_LEN;
+            check_cond("A3 repeated history h transport", fabsf(s_alt_cf_history[index][0] - before[index][0] - repeat * dh) < 3e-7f);
+            check_cond("A3 repeated history vz transport", fabsf(s_alt_cf_history[index][1] - before[index][1] - repeat * dv) < 3e-7f);
+            check_cond("A3 repeated history bias transport", fabsf(s_alt_cf_history[index][2] - before[index][2] - repeat * db) < 3e-7f);
+        }
+    }
+    g_alt_tof_delay_ticks = 8U;
+    Alt_UpdateFB();
+    check_cond("A3 delay cannot latch while armed", s_alt_delay_ticks == 0U);
+    Flight_Control_Lock = 0U;
+    Alt_UpdateFB();
+    check_cond("A3 delay latches while disarmed", s_alt_delay_ticks == 8U);
+    g_alt_tof_delay_ticks = 255U;
+    Alt_UpdateFB();
+    check_cond("A3 invalid delay clamps to ring capacity", s_alt_delay_ticks == 31U);
+    Alt_CfReset(1.25f, 1U);
+    check_cond("A3 reset seeds one consistent state", s_alt_cf_history_n == 1U
+               && s_alt_cf_history[0][0] == alt_cf.h && s_alt_cf_history[0][1] == alt_cf.vz
+               && s_alt_cf_history[0][2] == alt_cf.b_az);
+}
+
+/* A4 host-only hover quantization stress; exact zero acceleration, no plant. */
+static void test_a4_hover_steps(void)
+{
+    int mode, tick;
+    float max_h[2] = {0.0f, 0.0f}, max_v[2] = {0.0f, 0.0f};
+    float final_h[2], final_v[2];
+    for (mode = 0; mode < 2; mode++) {
+        reset_env(ALT_VZ_MODE_CF, 100U);
+        s_alt_spread_mode = (uint8_t)mode;
+        for (tick = 1; tick <= 6000; tick++) {
+            float h = alt_cf.h, v = alt_cf.vz;
+            if (tick % 10 == 0) {
+                ano_of.of_alt_cm = (tick < 1000) ? (uint32_t)(100 + ((tick / 10) % 2 ? 1 : -1)) : 100U;
+                ano_of.alt_update_cnt++;
+            }
+            Alt_UpdateFB();
+            if (fabsf(alt_cf.h - h) > max_h[mode]) max_h[mode] = fabsf(alt_cf.h - h);
+            if (fabsf(alt_cf.vz - v) > max_v[mode]) max_v[mode] = fabsf(alt_cf.vz - v);
+        }
+        final_h[mode] = alt_cf.h;
+        final_v[mode] = alt_cf.vz;
+        printf("A4 hover spread=%d max dh=%.8f m max dv=%.8f m/s final h=%.8f v=%.8f (host)\n",
+               mode, (double)max_h[mode], (double)max_v[mode], (double)final_h[mode], (double)final_v[mode]);
+    }
+    check_cond("A4 spread reduces max h step", max_h[1] < max_h[0]);
+    check_cond("A4 spread reduces max vz step", max_v[1] < max_v[0]);
+    check_cond("A4 equal steady height", fabsf(final_h[1] - final_h[0]) < 1e-5f);
+    check_cond("A4 equal steady velocity", fabsf(final_v[1] - final_v[0]) < 1e-5f);
+}
+
+static void test_a4_packets_and_clamp(void)
+{
+    int tick, i, active, peak = 0;
+    float ref_h = 1.0f, ref_v = 0.0f, ref_b = 0.0f;
+    reset_env(ALT_VZ_MODE_CF, 100U);
+    g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST; /* A2 is opt-in; default is legacy */
+    s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;  /* reset_env latched legacy while disarmed */
+    for (i = 0; i < 31; i++) Alt_CfHistoryPush();
+    for (tick = 0; tick < 35; tick++) {
+        if (tick > 0) {
+            alt_cf.h += alt_cf.vz * STAB_DT_S - 0.5f * alt_cf.b_az * STAB_DT_S * STAB_DT_S;
+            alt_cf.vz -= alt_cf.b_az * STAB_DT_S;
+            ref_h += ref_v * STAB_DT_S - 0.5f * ref_b * STAB_DT_S * STAB_DT_S;
+            ref_v -= ref_b * STAB_DT_S;
+            Alt_CfSpreadPredict();
+            Alt_CfHistoryPush();
+        }
+        if (tick == 0 || tick == 3 || tick == 15) {
+            float dh = (tick == 0) ? 0.01f : ((tick == 3) ? 0.02f : -0.01f);
+            float dv = (tick == 0) ? 0.02f : ((tick == 3) ? -0.01f : 0.01f);
+            float db = (tick == 0) ? 0.03f : ((tick == 3) ? -0.02f : 0.02f);
+            uint8_t delay = (tick == 3) ? 4U : 8U;
+            float t = (float)delay * STAB_DT_S;
+            alt_cf.dt_c = (tick == 3) ? 0.015f : 0.05f;
+            Alt_CfSpreadQueue(delay, dh, dv, db);
+            ref_h += dh + dv * t - 0.5f * db * t * t;
+            ref_v += dv - db * t;
+            ref_b += db;
+        }
+        Alt_CfSpreadApply();
+        check_cond("A4 current h equals ring after packet", alt_cf.h == s_alt_cf_history[s_alt_cf_head][0]);
+        check_cond("A4 current bias equals ring after packet", alt_cf.b_az == s_alt_cf_history[s_alt_cf_head][2]);
+    }
+    check_cond("A4 early/late packet residual drains to full correction h", fabsf(alt_cf.h - ref_h) < 2e-6f);
+    check_cond("A4 early/late packet residual drains to full correction v", fabsf(alt_cf.vz - ref_v) < 2e-6f);
+    check_cond("A4 early/late packet residual drains to full correction bias", fabsf(alt_cf.b_az - ref_b) < 2e-6f);
+    for (i = 0; i < (int)ALT_CF_SPREAD_PACKETS; i++) check_cond("A4 all residual packets drained", s_alt_cf_packets[i].remaining == 0U);
+    Alt_CfReset(1.0f, 1U);
+    alt_cf.dt_c = 0.05f;
+    Alt_CfSpreadQueue(0U, 0.0f, 0.0f, 3.0f);
+    for (tick = 0; tick < 10; tick++) {
+        Alt_CfSpreadApply();
+        check_cond("A4 applied bias clamp", fabsf(alt_cf.b_az) <= ALT_CF_BAZ_MAX);
+        check_cond("A4 clamped ACTUAL bias matches ring", alt_cf.b_az == s_alt_cf_history[s_alt_cf_head][2]);
+    }
+    check_cond("A4 bias saturates and residual is discarded", alt_cf.b_az == ALT_CF_BAZ_MAX);
+    Alt_CfReset(1.0f, 1U);
+    alt_cf.dt_c = 0.1f;
+    for (tick = 0; tick < 60; tick++) {
+        Alt_CfSpreadQueue(0U, 0.0f, 0.0f, 0.0f);
+        active = 0;
+        for (i = 0; i < (int)ALT_CF_SPREAD_PACKETS; i++) if (s_alt_cf_packets[i].remaining) active++;
+        if (active > peak) peak = active;
+        Alt_CfSpreadApply();
+    }
+    check_cond("A4 worst-case packet capacity reaches bounded 20", peak == (int)ALT_CF_SPREAD_PACKETS);
+    Alt_CfReset(1.0f, 1U);
+    for (i = 0; i < (int)ALT_CF_SPREAD_PACKETS; i++) check_cond("A4 reset clears residual packets", s_alt_cf_packets[i].remaining == 0U);
+    g_alt_cf_spread_mode = 1U;
+    g_alt_tof_delay_ticks = 8U;
+    g_alt_tof_sample_mode = ALT_TOF_SAMPLE_LEGACY;
+    Alt_UpdateFB();
+    check_cond("A4 published effective flags reject airborne pending writes", alt_cf.spread_mode == 0U
+               && alt_cf.delay_ticks == 0U && alt_cf.sample_mode == ALT_TOF_SAMPLE_NEWEST);
+    Flight_Control_Lock = 0U;
+    Alt_UpdateFB();
+    check_cond("A4 published effective flags latch disarmed", alt_cf.spread_mode == 1U
+               && alt_cf.delay_ticks == 8U && alt_cf.sample_mode == ALT_TOF_SAMPLE_LEGACY);
+    printf("A4 packets early/late drain; bias clamp; peak=%d/%u; sizeof packets=%u bytes (host)\n",
+           peak, (unsigned)ALT_CF_SPREAD_PACKETS, (unsigned)sizeof(s_alt_cf_packets));
+}
+
+/* C1 synthetic diagnostic isolation; acceleration and durations are PROPOSED test inputs. */
+static void test_c1_disarmed_diagnostic(void)
+{
+    int tick;
+    uint32_t before;
+    reset_env(ALT_VZ_MODE_CF, 0U);
+    Flight_Control_Lock = 0U;
+    check_cond("C1 default off", g_alt_cf_disarmed_test == 0U);
+    ano_of.of_alt_cm = 80U;
+    ano_of.alt_update_cnt++;
+    Alt_UpdateFB();
+    g_alt_cf_disarmed_test = 1U;
+    for (tick = 0; tick < 50; tick++) {
+        if (tick % 10 == 0) ano_of.alt_update_cnt++;
+        Alt_UpdateFB();
+    }
+    before = alt_cf.n_corr;
+    Lin_Acc_Z_body = 0.5f / (ALT_CF_ACC_SIGN * MG_TO_MPS2);
+    for (tick = 0; tick < 20; tick++) {
+        Alt_UpdateFB();
+        check_cond("C1 position feedback isolated", Ctrler.Z_posPID.FB == ano_of.of2_h);
+        check_cond("C1 velocity feedback isolated", Ctrler.Z_ratePID.FB == ano_of.of2_h_f2_v);
+    }
+    check_cond("C1 disarmed estimator predicts", alt_cf.vz > 0.04f);
+    ano_of.alt_update_cnt++;
+    Alt_UpdateFB();
+    check_cond("C1 disarmed estimator corrects", alt_cf.n_corr > before);
+    alt_cf.b_az = 0.25f;
+    Flight_Control_Lock = 1U;
+    Alt_UpdateFB();
+    check_cond("C1 arm clears flag", g_alt_cf_disarmed_test == 0U);
+    check_cond("C1 arm clears diagnostic bias", alt_cf.b_az == 0.0f);
+    check_cond("C1 arm starts zero velocity", alt_cf.vz == 0.0f);
+    check_cond("C1 arm clears history", s_alt_cf_history_n == 1U);
+    Flight_Control_Lock = 0U;
+    Alt_UpdateFB();
+    check_cond("C1 stays disabled after disarm", g_alt_cf_disarmed_test == 0U);
+    g_alt_cf_disarmed_test = 1U;
+    Alt_UpdateFB();
+    alt_cf.vz = 0.2f;
+    alt_cf.b_az = 0.1f;
+    g_alt_cf_disarmed_test = 0U;
+    Alt_UpdateFB();
+    check_cond("C1 disabling restores pad hold", alt_cf.h == ano_of.of2_h && alt_cf.vz == 0.0f);
+    check_cond("C1 disabling clears bias", alt_cf.b_az == 0.0f);
+    printf("C1 PASS: disarmed predict/correct, controller isolation, arm/reset and default-off guard\n");
+}
+
 int main(void)
 {
     test_u1_fd_bit_exact_on_213634_trace();
@@ -1445,17 +1733,24 @@ int main(void)
     test_u5_rejected_samples_then_resync();
     test_u6_baz_clamp();
     test_u7_disarmed_hold();
+    test_c1_disarmed_diagnostic();
     test_u8_first_arm_pad_hold();
     test_u9_rearm_pad_hold();
     test_u10_legacy_golden();
     test_u11_design_cadence();
     test_u12_rate_independence();
     test_u13_next_arm_latch();
+    test_a1_stale_arrival();
+    test_a2_outlier_and_latch();
+    test_a3_delayed_sine();
+    test_a3_history_and_latch();
+    test_a4_hover_steps();
+    test_a4_packets_and_clamp();
 
     if (g_fail_count != 0) {
         printf("FAILED: %d checks failed (%d passed)\n", g_fail_count, g_pass_count);
         return 1;
     }
-    printf("ALL 13 TESTS PASSED (U1-U13) (%d checks)\n", g_pass_count);
+    printf("ALL ALT_CF TESTS PASSED (U1-U13, A1-A4) (%d checks)\n", g_pass_count);
     return 0;
 }

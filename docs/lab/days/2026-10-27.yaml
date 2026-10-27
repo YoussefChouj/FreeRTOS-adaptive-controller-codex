@@ -7,6 +7,26 @@
 # Every pass threshold and gain target below is PROPOSED unless cited to a measured 10-24 log.
 
 day: 2026-10-27
+# Standalone Z-CF root-cause order, operator-run before resuming this deck:
+# Full gates/blockers: docs/lab/cf-resume-2026-10-27.md (offline C3 plan).
+# ground-cadence-old: lab_z_cf_hover_legacy, direct slot0, PROPOSED200Hz.
+# hand-estimator-old: BLOCKED if old image lacks g_alt_cf_disarmed_test;
+# supported bench method/CEO decision required, never arm to simulate this test.
+# hover-baseline-old: compatibility card and saved cf-legacy PID preset.
+# CEO-only reviewed flash (disarmed/main/locks), then livewatch verify.
+# ground-cadence-new -> hand-estimator-new: primary lab_z_cf_hover capture,
+# disarmed diagnostic flag1 (telemetry only, cleared on arm), then return0.
+# PROPOSED hand motion1Hz,20-30cm. Delay d needs MEASURED alignment+uncertainty;
+# ToF-vs-CF correlation alone is relative filter lag, not sensor latency.
+# hover-old-cf-emulation -> hover-fixed-cf: explicit runtime matrix in resume doc,
+# same PID gains/rate mode; keep correction-rate ABBA below as a separate comparison.
+# z-height-step-080-to100: PROPOSED0.8->1.0m, BLOCKED pending CEO-reviewed
+# lab_z_vz_steps amendment (existing card is1.0->1.4/0.6m velocity legs).
+# Preserve every original flight and velocity leg; do not mislabel that card.
+# All standalone targets/thresholds PROPOSED; no new bench/flight evidence yet.
+# Missing effective flags/nonzero delay/spread: baseline replay unsupported;
+# use cadence/lag/period/bias/step metrics without a replay-faithful claim.
+# After evidence review resume .\labday 2026-10-27 --from smoke-hover.
 # Standalone CF ABBA plan, PROPOSED; operator-run outside the automatic deck.
 # Requires reviewed flashed firmware and identical PID preset files copied per COMMANDS.md.
 # cf-legacy-hover:
@@ -17,7 +37,8 @@ day: 2026-10-27
 # .\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-rate-scaled.json
 # cf-legacy-hover-repeat:
 # .\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-legacy.json
-# First fast capture must achieve PROPOSED replay correlation >=0.95 without hidden-input issues.
+# New-image effective delay0/spread0 only: PROPOSED replay correlation >=0.95
+# without hidden-input issues; unknown/nonzero timing cannot pass baseline replay.
 # Both B vs both A: PROPOSED phase improvement >=15deg at0.5-0.9Hz, geo>=0.75, range std no worse.
 # Otherwise falsified; next suspect range latency. Preserve all existing day flights below.
 carry: false

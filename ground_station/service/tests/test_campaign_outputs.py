@@ -240,13 +240,14 @@ def test_live_capture_lab_cap_spares_excite_cards():
     assert "rate 25 Hz" in notes[0] and "rate 200 Hz" in notes[1]
 
 
-def test_cf_live_capture_bypasses_lab_cap_and_uses_only_direct_slot_zero(monkeypatch):
+@pytest.mark.parametrize("group", ["z_cf", "z_cf_legacy"])
+def test_cf_live_capture_bypasses_lab_cap_and_uses_only_direct_slot_zero(monkeypatch, group):
     from ground_station.service import campaign_live as cl
     svc = FakeRecService(lab_mode=True)
     check = Mock()
     monkeypatch.setattr(cl, "check_cf_capture_rate", check)
     begin, end = live_capture_hooks(svc, max_rate_hz=25.0)
-    begin(_exp(log_plan={"rate_hz": 200, "groups": ["z_cf"],
+    begin(_exp(log_plan={"rate_hz": 200, "groups": [group],
                          "slow_hz": 25, "slow": ["z_pid_gains", "camera_fusion", "takeoff_gate"]}), "cf")
     sent = [c.kwargs for c in svc.bridge.subscribe_slot.call_args_list]
     assert [(s["slot"], s["divider"]) for s in sent] == [(1, 0), (2, 0), (3, 0), (0, 1)]
@@ -256,26 +257,28 @@ def test_cf_live_capture_bypasses_lab_cap_and_uses_only_direct_slot_zero(monkeyp
     svc.bridge.restore_lab_slot0.assert_called_once()
 
 
-def test_cf_live_capture_rejects_bad_cadence_before_recording_and_stops_slots(monkeypatch):
+@pytest.mark.parametrize("group", ["z_cf", "z_cf_legacy"])
+def test_cf_live_capture_rejects_bad_cadence_before_recording_and_stops_slots(monkeypatch, group):
     from ground_station.service import campaign_live as cl
     svc = FakeRecService(lab_mode=True)
     monkeypatch.setattr(cl, "check_cf_capture_rate", Mock(side_effect=RuntimeError("CF capture not ready")))
     begin, _ = live_capture_hooks(svc, max_rate_hz=25.0)
     with pytest.raises(RuntimeError, match="CF capture not ready"):
-        begin(_exp(log_plan={"rate_hz": 200, "groups": ["z_cf"]}), "cf")
+        begin(_exp(log_plan={"rate_hz": 200, "groups": [group]}), "cf")
     assert svc.calls == ["stop"]
     stops = [c.kwargs for c in svc.bridge.subscribe_slot.call_args_list if not c.kwargs["divider"]]
     assert {s["slot"] for s in stops} == {1, 2, 3}
     svc.bridge.restore_lab_slot0.assert_called_once()
 
 
-def test_cf_failed_recording_start_restores_status(monkeypatch):
+@pytest.mark.parametrize("group", ["z_cf", "z_cf_legacy"])
+def test_cf_failed_recording_start_restores_status(monkeypatch, group):
     from ground_station.service import campaign_live as cl
     svc = FakeRecService(recording=False, lab_mode=True)
     monkeypatch.setattr(cl, "check_cf_capture_rate", Mock())
     begin, _ = live_capture_hooks(svc)
     with pytest.raises(RuntimeError, match="recording did not start"):
-        begin(_exp(log_plan={"rate_hz": 200, "groups": ["z_cf"]}), "cf")
+        begin(_exp(log_plan={"rate_hz": 200, "groups": [group]}), "cf")
     svc.bridge.restore_lab_slot0.assert_called_once()
     assert svc.calls[-1] == "stop"
 

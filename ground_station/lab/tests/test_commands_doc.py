@@ -5,6 +5,8 @@ A lab command changed without its doc line fails here, so the doc can be typed b
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 DOC = ROOT / "docs" / "lab" / "COMMANDS.md"
 CAMERA_SH = ROOT / "ground_station" / "lab" / "camera_truth.sh"
@@ -59,7 +61,7 @@ def problems(text: str) -> tuple[list[str], int]:
                     src = (ROOT / LAUNCHERS[launcher]).read_text(encoding="utf-8")
             for flag in FLAG.findall(rest):
                 n += 1
-                if f'"{flag}"' not in src:
+                if not any(f"{quote}{flag}{quote}" in src for quote in ('"', "'")):
                     bad.append(f"{m.group(0)}: flag {flag} not in its code")
     keys = re.search(r"^### 2\.3.*?(?=^###)", text, re.M | re.S)
     tracker = TRACKER.read_text(encoding="utf-8")
@@ -86,3 +88,13 @@ def test_checker_catches_a_wrong_line():
         " `docs/lab/no-such-file.md`\n")
     bad, _ = problems(text)
     assert len(bad) == 5, bad
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_checker_accepts_both_python_flag_quote_styles(monkeypatch, quote):
+    source = f"parser.add_argument({quote}--output{quote}, required=True)"
+    monkeypatch.setitem(globals(), "module_source", lambda _: source)
+    bad, checked = problems("python -m ground_station.lab.z_cf_sim --output result")
+    assert not bad and checked == 2
+    bad, _ = problems("python -m ground_station.lab.z_cf_sim --missing result")
+    assert len(bad) == 1 and "--missing" in bad[0]

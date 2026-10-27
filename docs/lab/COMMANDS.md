@@ -39,8 +39,11 @@ Standalone altitude diagnosis (PROPOSED 0.8 m / 30 s hover, nominal PID, no gain
 
 This requests PROPOSED 200 Hz for CF height/velocity, acceleration, bias, residual and correction count;
 range arrivals/rejections; both Z loops' P/I/D/output terms; collective and the core motor,
-attitude, reference/feedback and battery signals. Actual gains/limits and camera inputs share
-the same direct slot at that rate. A lower-rate CF replay plan is refused. Results go to
+attitude, reference/feedback and battery signals. Actual gains/limits, body acceleration
+and effective estimator flags share the direct slot. The new-image card omits camera_fusion
+telemetry to fit the budget; the old-image compatibility card retains it. A lower-rate
+CF replay plan is refused. The primary card requires the reviewed root-cause image;
+before deployment, substitute lab_z_cf_hover_legacy in all old-image commands. Results go to
 `logs/flights/<date>/<NN>_z-cf-hover/` and the referenced
 `logs/sessions/` recording. This standalone command does not launch camera fusion; keep the
 existing calibrated camera session running if using it. RC arm and normal abort gates apply.
@@ -49,10 +52,14 @@ Keep the same gains for this diagnostic; a hover identifies symptoms, not full s
 The CF diagnostic uses **one direct subscription, slot 0, divider 1** including `dt_c`,
 `y_corr`, latched `mode`, range inputs and `xTickCount`. Slots 1–3 are stopped first;
 there is no parallel dashboard stream. Core/arm/status fields are in the same CF frame.
-Formerly slow diagnostics are promoted to the same rate; no variables are removed.
-Offline DWARF sizing against the current AXF resolves all 102 scalars into 48 coalesced
-ranges, with a 325-byte payload. Calculated wire use is (325 + 12) * 200 = 67,400 B/s
-against the 70,041.6 B/s planning budget. This is sizing evidence, not measured throughput.
+Formerly slow gains/takeoff diagnostics are promoted to the same rate. Old-image DWARF
+sizing resolves 102 scalars, 48 ranges and 325 payload bytes: (325 + 12) * 200 =
+67,400 B/s. The extended image with camera would need 70,600 B/s and is rejected.
+Omitting camera gives 100 scalars and 317 payload bytes, calculated 65,800 B/s
+against the 70,041.6 B/s planning cap. The host calculator accepts a PROPOSED legal
+placement for new fields (47 ranges, 386 request bytes); actual new-AXF placement,
+range fit and transport cadence remain unverified. This is calculated sizing, not
+measured throughput. Slots 1-3 add no load because they are stopped.
 The live typed preview must resolve every field at the requested clock and fit the budget.
 CF diagnostics bypass the ordinary lab 25 Hz cap. Before recording a flight, slot 0
 must deliver PROPOSED >=190 Hz with zero sequence drops over a PROPOSED 2 s window;
@@ -90,6 +97,63 @@ an initialized armed segment, and all new fast fields. Missing ticks, hidden cor
 resets or acceleration clipping prevent a faithful-replay claim. The historical slow capture
 cannot supply those missing inputs. `estimator is still not understood` means the replay gate
 has not passed; it does not claim a successful estimator model.
+
+Offline four-recording Z root-cause analysis (reads the source logs without modifying them):
+
+```powershell
+python tools/analyze_z_cf_b1.py --logs-root D:/Projects/UAV_lab/FreeRTOS-adaptive-controller-codex/logs --output-dir docs/lab/assets/z-cf-rootcause
+```
+
+Produces measured spectra, relative lags, cadence, bias/throttle correlation and a figure.
+The short 25 Hz records cannot identify true sensor latency or hidden correction steps;
+search-boundary spectral peaks are unresolved slow variation, not precise periods.
+
+The analysis JSON also reports ToF-to-height and d(ToF)/dt-to-velocity lag
+(positive means CF follows ToF; PROPOSED 0.1-2 Hz zero-phase band, +/-0.5 s
+search), dominant period, optional coherent bias/throttle correlation, and observed
+correction residuals. Raw of_alt_cm/100 is preferred, with of2_h fallback. At
+25 Hz, inter-frame differences cannot isolate 5 ms corrections; contiguous 200 Hz
+snapshots are required. Missing replay diagnostics yield unavailable metrics;
+large gaps are rejected. Effective alt_cf.delay_ticks or alt_cf.spread_mode nonzero
+disables baseline replay certification. Pending requests are only a fallback;
+unlogged effective modes prevent certification even when the baseline traces match. All-tick residuals
+include smoothing between arrivals; arrival-tick residuals are reported separately.
+
+Offline vertical closed-loop simulation (all physical parameters are PROPOSED):
+
+```powershell
+python -m ground_station.lab.z_cf_sim --output docs/lab/data/z-cf-rootcause-A5
+```
+
+Writes estimator/delay/motor/PID sweeps, cadence sensitivity, assumptions and test evidence.
+The model uses the actual 100 Hz altitude / 200 Hz climb PID schedule. Its averaged
+sample/hold margins and assumed thrust slope are simulation evidence only; hover
+throttle alone cannot identify mass or thrust response.
+
+Motors-off estimator diagnostic: g_alt_cf_disarmed_test is a runtime boolean,
+default 0. While disarmed, 1 runs CF predict/correct for the hand test and keeps
+its outputs isolated from Z controller feedback. It clears on arm; diagnostic
+toggles and the arm transition reset estimator history/bias. The disarmed diagnostic
+uses the selected CF rate mode. Firmware lacking this flag cannot perform this test.
+
+Root-cause runtime variable IDs are permanent and all reject either armed-state source:
+
+| ID | Variable | Range/default | Use |
+|---|---|---|---|
+| 60 | g_alt_tof_sample_mode | 0..1 / 1 | 0 old tick median; 1 newest accepted frame |
+| 61 | g_alt_tof_delay_ticks | 0..31 / 0 | 5 ms ticks; identify delay before setting |
+| 62 | g_alt_cf_spread_mode | 0..1 / 0 | experimental correction spreading |
+| 63 | g_alt_cf_disarmed_test | 0..1 / 0 | motors-off diagnostic; clears on arm |
+
+Configure with the diagnostic off, then enable the hand test while disarmed.
+Record effective alt_cf.sample_mode, alt_cf.delay_ticks and alt_cf.spread_mode;
+pending globals are not evidence of active settings. The old-image compatibility
+card has no new flags, body-acceleration fields or disarmed hand-test capability:
+
+```powershell
+.\fly lab_z_cf_hover_legacy --record-only cf-ground-rate-old --rate 200
+.\fly lab_z_cf_hover_legacy --once --gains logs/lab/2026-10-27/2026-10-27-cf-legacy.json
+```
 
 CF correction-rate ABBA experiment (PROPOSED): after the reviewed firmware is flashed and
 verified, copy the two preset sources next to the saved day gains. The copies preserve the

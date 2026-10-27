@@ -515,7 +515,7 @@ LAB_STATUS_HZ = 10.0       # = 100 Hz / WifiBridge.LAB_SLOT0_DIVIDER
 
 def keeps_full_rate(exp: Any) -> bool:
     """SysID excitation and per-tick CF diagnostics cannot use the ordinary lab cap."""
-    if "z_cf" in (getattr(exp, "log_plan", None) or {}).get("groups", ()):
+    if {"z_cf", "z_cf_legacy"}.intersection((getattr(exp, "log_plan", None) or {}).get("groups", ())):
         return True
     steps = getattr(getattr(exp, "scenario", None), "steps", None) or ()
     return any(getattr(st, "kind", "") == "excite" for st in steps)
@@ -588,7 +588,7 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
                 bridge.subscribe_slot(slot=slot, divider=0, ranges=[])
             applied.update(steps=steps, slots=first + len(steps), single_cf=single_cf)
         wait_streams_named(getattr(service, "bridge", None), [step["args"]["slot"] for step in steps])
-        if "z_cf" in plan["groups"]:
+        if {"z_cf", "z_cf_legacy"}.intersection(plan["groups"]):
             check_cf_capture_rate(service.bridge, [0])
         service.stop_recording()
         st = service.start_recording(
@@ -603,7 +603,7 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
         try:
             return begin_impl(exp, flight_id)
         except BaseException:
-            if "z_cf" in (getattr(exp, "log_plan", None) or {}).get("groups", ()):
+            if {"z_cf", "z_cf_legacy"}.intersection((getattr(exp, "log_plan", None) or {}).get("groups", ())):
                 bridge = getattr(service, "bridge", None)
                 if bridge is not None:
                     try:

@@ -57,7 +57,7 @@ def test_every_c_row_parses() -> None:
     """Every VAR_WRITE_ROW line of the table parses (load_rows refuses repeated names and ids)."""
     lines = re.findall(r"^[ \t]*VAR_WRITE_ROW\(", C, re.M)
     rows = wfb_var.load_rows()
-    assert len(rows) == len(lines) == 62
+    assert len(rows) == len(lines) == 67
     assert all(1 <= r.id <= 254 and r.min <= r.max for r in rows.values())
 
 
@@ -93,3 +93,15 @@ def test_preset_duration_counts_goto_only_with_a_fixed_start() -> None:
     assert wfb_var.preset_duration_s(dict(d, **{"traj_p.start_fixed": 1.0})) == 20.0
     assert wfb_var.preset_duration_s(dict(d, **{"traj_p.start_fixed": 0.0})) == 14.0
     assert wfb_var.traj_total_max_s() == max(r.max for n, r in wfb_var.rows().items() if n == "traj_p.move_s")
+
+
+@pytest.mark.parametrize("name,id_,maximum", [
+    ("g_alt_tof_sample_mode", 60, 1), ("g_alt_tof_delay_ticks", 61, 31),
+    ("g_alt_cf_spread_mode", 62, 1), ("g_alt_cf_disarmed_test", 63, 1),
+])
+def test_alt_cf_runtime_rows(name, id_, maximum):
+    row = wfb_var.rows()[name]
+    assert (row.id, row.min, row.max, row.integer) == (id_, 0, maximum, True)
+    wfb_var.check(name, maximum)
+    with pytest.raises(wfb_var.VarWriteError):
+        wfb_var.check(name, maximum + 1)
