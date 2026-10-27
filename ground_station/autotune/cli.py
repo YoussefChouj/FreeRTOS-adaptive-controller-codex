@@ -54,6 +54,23 @@ def _m(m: Margins | None) -> str:
     return f"PM {m.pm_deg:5.1f} deg  GM {gm:>8}  wc {m.wc_rps:6.1f} rad/s  max|S| {m.s_max:.2f}"
 
 
+def _design_band(fit: fr.PlantFit, flown: PidRow, dt: float) -> tuple[float, float] | None:
+    """Hz band the margins of the flown loop are read in: 0.25 x its crossover up to the larger of 4 x crossover and
+    1.25 x its phase crossover. None (judge the full band) when the fit has no positive gain or no crossover."""
+    if not fit.plant.k > 0:
+        return None
+    w = fr.np.geomspace(0.05, 0.95 * math.pi / dt, 2000)
+    mag, ph = rate_loop(fit.plant, flown, w=w, dt=dt)
+    wc = margins(mag, ph, w).wc_rps
+    if not (math.isfinite(wc) and wc > 0):
+        return None
+    hi = 4.0 * wc
+    below = fr.np.nonzero(ph <= -180.0)[0]
+    if len(below):
+        hi = max(hi, 1.25 * float(w[below[0]]))
+    return 0.25 * wc / (2 * math.pi), hi / (2 * math.pi)
+
+
 def _identify(args: argparse.Namespace, flown: PidRow, excite: Mapping[str, Any],
               id_loop: str = "rate") -> dict[str, Any]:
     """Load logs, IV FRF, fit. Returns {'series', 'runs', 'frf', 'fit', 'problem', 'baseline', 'psd', 'zoh'}."""
@@ -72,7 +89,12 @@ def _identify(args: argparse.Namespace, flown: PidRow, excite: Mapping[str, Any]
     except fr.IdError as exc:
         problem = str(exc)
     else:
-        problem = fr.quality_problem(frf, fit)
+        band = _design_band(fit, flown, dt)
+        problem = fr.quality_problem(frf, fit, design_band_hz=band)
+        if band is not None:
+            res, n = fr.band_residual(frf, fit, band)
+            print(f"design band {band[0]:.2g}-{band[1]:.2g} Hz (flown loop crossover / phase crossover): "
+                  f"residual {res:.3f} on {n} bins")
     starts = []
     for axis in (fr.RATE_PID if id_loop == "rate" else [args.axis]):
         try:

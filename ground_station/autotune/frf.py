@@ -327,16 +327,42 @@ def fit_plant(frf: Frf, allow_drag: bool = False) -> PlantFit:
                     float(np.sqrt(np.sum(resid_d(q) ** 2))), len(f))
 
 
-def quality_problem(frf: Frf, fit: PlantFit | None) -> str:
-    """Why the identification must not be used for a design, or '' if it may."""
+def band_residual(frf: Frf, fit: PlantFit, band_hz: tuple[float, float]) -> tuple[float, int]:
+    """(relative residual, bins) of `fit` on the kept bins inside band_hz, weighted as fit_plant weights them."""
+    sel = frf.keep & (frf.f_hz >= band_hz[0]) & (frf.f_hz <= band_hz[1])
+    f, g, coh = frf.f_hz[sel], frf.plant[sel], frf.coh[sel]
+    if len(f) == 0:
+        return math.inf, 0
+    wgt = np.minimum(coh / np.maximum(1.0 - coh, 1e-3), 50.0)
+    e = (g - fit.plant.frf(2 * math.pi * f)) / np.abs(g)
+    return float(np.sqrt(np.sum(wgt * np.abs(e) ** 2) / np.sum(wgt))), int(len(f))
+
+
+def quality_problem(frf: Frf, fit: PlantFit | None, design_band_hz: tuple[float, float] | None = None) -> str:
+    """Why the identification must not be used for a design, or '' if it may.
+
+    design_band_hz: the band the margins are read in (cli: current loop's crossover to past its phase crossover).
+    When given, the fit is judged there and the full-band residual is only reported. Why: on the 10-27 roll rate
+    sweeps the model sits within 2 dB / 7 deg from 1.5 to 12 Hz (crossover 3 Hz, phase crossover 10 Hz) and misses
+    only at the band edges (0.7 Hz -5 dB, 20-40 Hz +8 dB), which pushed the full-band residual to 0.41-0.51 and
+    refused a fit whose margins are right. The same FIT_MAX_REL applies inside the band; nothing is loosened there."""
     if frf.coverage < BAND_COVER_MIN:
         n = round(frf.coverage * N_BANDS)
         return (f"coherence >= {COH_MIN} in only {n} of {N_BANDS} sub-bands of {frf.band[0]:g}-{frf.band[1]:g} Hz "
                 f"(need >= {math.ceil(BAND_COVER_MIN * N_BANDS)}): excitation too weak or too noisy")
     if fit is None:
         return "no fit"
-    if fit.rel_residual > FIT_MAX_REL:
-        return f"fit residual {fit.rel_residual:.2f} > {FIT_MAX_REL}: plant is not integrator+lag+delay here"
+    if design_band_hz is None:
+        if fit.rel_residual > FIT_MAX_REL:
+            return f"fit residual {fit.rel_residual:.2f} > {FIT_MAX_REL}: plant is not integrator+lag+delay here"
+        return ""
+    res, n = band_residual(frf, fit, design_band_hz)
+    lo, hi = design_band_hz
+    if n < 4:
+        return f"only {n} coherent bins in the design band {lo:.2g}-{hi:.2g} Hz, need >= 4 to judge the fit there"
+    if res > FIT_MAX_REL:
+        return (f"fit residual {res:.2f} > {FIT_MAX_REL} in the design band {lo:.2g}-{hi:.2g} Hz ({n} bins; full band "
+                f"{fit.rel_residual:.2f}): plant is not integrator+lag+delay where the margins are read")
     return ""
 
 

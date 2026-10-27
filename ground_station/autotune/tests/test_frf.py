@@ -97,3 +97,17 @@ def test_duplicate_timestamps_are_tolerated(tmp_path):
 
     assert abs(t0 - t0_s) <= 1.0/fs
     assert fs == fs_s
+
+
+def test_design_band_judges_the_fit_where_the_margins_are_read():
+    # 10-27 roll rate shape: model right from 1 to 12 Hz, +8 dB above 20 Hz -> full band refused, design band passes
+    p = synth.DEMO_PLANT
+    f = np.geomspace(0.5, 40.0, 60)
+    g = p.frf(2 * np.pi * f) * np.where(f > 20.0, 10 ** (8 / 20), 1.0)
+    frf = fr.Frf(f, g, np.full(len(f), 0.9), np.ones(len(f), bool), (0.5, 40.0), 1.0, 8)
+    fit = fr.PlantFit(p, 0.45, len(f))
+    assert "fit residual 0.45" in fr.quality_problem(frf, fit)
+    assert fr.band_residual(frf, fit, (1.0, 12.0)) == (pytest.approx(0.0, abs=1e-9), 33)
+    assert fr.quality_problem(frf, fit, design_band_hz=(1.0, 12.0)) == ""
+    assert "design band" in fr.quality_problem(frf, fit, design_band_hz=(12.0, 40.0))
+    assert "only 0 coherent bins" in fr.quality_problem(frf, fit, design_band_hz=(50.0, 60.0))
