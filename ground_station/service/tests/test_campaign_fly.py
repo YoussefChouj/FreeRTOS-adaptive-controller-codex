@@ -566,6 +566,15 @@ def test_debrief_lines_names_the_abort():
     assert not any("ABORTED" in ln for ln in campaign_fly.debrief_lines([], {"status": "done", "flights": [{}]}, "f/01"))
 
 
+def test_debrief_lines_name_who_ended_the_flight():
+    # 10-26 smoke: an operator land and a pilot disarm read "the safety monitor landed it" with safety_trip 0
+    for reason, who in (("operator land", "the operator ended it"),
+                        ("pilot disarmed during takeoff (status.arm 0)", "the pilot ended it"),
+                        ("firmware landing during hold (safety_trip 3)", "the firmware landed it")):
+        st = {"status": "done", "flights": [{"experiment": "x", "abort_level": 1, "abort_reason": reason}]}
+        assert f"({who};" in campaign_fly.debrief_lines([], st, "f/01")[1]
+
+
 def test_debrief_lines_never_airborne():
     # Friction B14: air <= 0 or max_z < 0.25 -> "landing offset: no landing (never airborne)"
     samples_air_zero = [_sample(0.0, 0, 10.0, 0.0, 0.0, air=0.0)]

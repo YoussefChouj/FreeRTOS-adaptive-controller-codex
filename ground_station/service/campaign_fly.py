@@ -1789,6 +1789,17 @@ def pad_height_error(base):
     return None
 
 
+def _ended_by(reason: str) -> str:
+    """Who ended an aborted flight, from the runner's reason (10-26 smoke: an operator land read "the safety monitor
+    landed it" with safety_trip 0)."""
+    for prefix, who in (("operator", "the operator ended it"), ("pilot", "the pilot ended it"),
+                        ("firmware landing", "the firmware landed it"), ("takeoff refused", "it never took off"),
+                        ("timeout", "the campaign timed out")):
+        if reason.startswith(prefix):
+            return who
+    return "the safety monitor landed it"
+
+
 def wait_for_arm(base, campaign, pack, key=None, poll_s=0.25, preflight=True):
     """'go' after an RC arm held for COUNTDOWN_S with the preflight passing, 'quit' on q or on Ctrl+C outside the
     countdown, 'link' when the link comes back after LINK_LOST_S of silence (a pack swap). Only a disarmed -> armed
@@ -1938,8 +1949,9 @@ def debrief_lines(samples, st, folder, cam=None):
     lines = [f"{st.get('status')} {st.get('reason') or ''}".strip()
              + f"  air {air:.1f} s  {len(st.get('flights') or [])} flight(s)  {len(samples)} live samples"]
     # 10-18 mem1: a takeoff abort read as "it only hovered": say the abort and that the steps after it never ran
-    lines += [f"ABORTED L{f.get('abort_level') or '?'} {f.get('experiment') or 'flight'}: {f['abort_reason']} (the safety "
-              "monitor landed it; the steps after that point never ran)" for f in st.get("flights") or [] if f.get("abort_reason")]
+    lines += [f"ABORTED L{f.get('abort_level') or '?'} {f.get('experiment') or 'flight'}: {f['abort_reason']} "
+              f"({_ended_by(f['abort_reason'])}; the steps after that point never ran)"
+              for f in st.get("flights") or [] if f.get("abort_reason")]
     for phase in ("HOVER", "TRAJ"):
         part = [s for s, p in zip(samples, phases) if p == phase]
         errs = {ax: _err_cm(part, ax) for ax in "xyz"}

@@ -382,9 +382,10 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
         return int(deps.status()["prim_state"])
 
     nudged = ""  # the operator nudge (stop/next) that ended the last skippable wait early
+    left_idle = False  # prim left IDLE after TAKEOFF went out
 
     def wait(cond: Callable[[], bool], phase: str, dt_s: float | None = None, skippable: bool = False) -> bool:
-        nonlocal ticks, decision, nudged
+        nonlocal ticks, decision, nudged, left_idle
         dt = dt_s or deps.dt_s
         while not cond():
             req = deps.control.get() if deps.control else None
@@ -397,7 +398,11 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             if ticks >= max_ticks:
                 decision = AbortDecision(level=1, reason=f"timeout: {phase}")
                 return False
-            if airborne and prim() in (PRIM_DESCEND, PRIM_IDLE):
+            # airborne is set only once the takeoff wait returns, so a disarm during the climb (10-26 smoke: prim
+            # TAKEOFF -> IDLE at 4 s) waited for HOVER until the operator pressed l; prim leaving IDLE arms the check.
+            p = prim()
+            left_idle = left_idle or (takeoff_sent and p != PRIM_IDLE)
+            if (airborne or left_idle) and p in (PRIM_DESCEND, PRIM_IDLE):
                 decision = AbortDecision(level=1, reason=_landing_reason(deps.status(), phase))
                 return False
             deps.client.heartbeat()

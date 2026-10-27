@@ -118,6 +118,19 @@ def test_disarm_mid_hold_names_the_pilot_not_the_firmware():
     assert out.decision.reason == "pilot disarmed during hold (status.arm 0)"
 
 
+def test_disarm_during_the_climb_ends_the_flight_with_the_pilot_named():
+    """10-26 smoke: RC disarm at 4 s into the climb (prim TAKEOFF -> IDLE), the takeoff wait kept waiting for HOVER."""
+    drone, clock, deps = _rig()
+    rc = WfbClient(drone.send, first_txid=500)
+    _hook_step(deps, clock, 10.3, rc.kill)  # 10 s ground idle, then TAKEOFF; 0.5 m at 0.5 m/s is still climbing
+    inner = deps.status
+    deps.status = lambda: {**inner(), "arm": int(drone._armed)}  # status.arm, as live_status streams it
+    out = fly_scenario(load_scenario("hover", {"z": 0.5}), deps)
+    assert out.aborted and out.landed
+    assert out.decision.reason == "pilot disarmed during takeoff (status.arm 0)"
+    assert clock() < 20.0
+
+
 def test_takeoff_idles_on_the_ground_for_idle_s_first():
     """10-06: the operator wants the props at idle 10 s before TAKEOFF (hover.yaml idle_s default)."""
     drone, clock, deps = _rig()
