@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import control
 import numpy as np
 
 DT_S = 0.005
@@ -151,8 +152,11 @@ def _crossings(y: np.ndarray, level: float) -> np.ndarray:
     return np.flatnonzero(np.diff(np.sign(y - level)) != 0)
 
 
-def margins(mag: np.ndarray, phase_deg: np.ndarray, w: np.ndarray = _W_RATE) -> Margins:
-    """Margins from |L| and its continuous (unwrapped) phase on the grid w. The worst crossing counts."""
+def scan_margins(mag: np.ndarray, phase_deg: np.ndarray, w: np.ndarray = _W_RATE) -> Margins:
+    """Fast grid scan for the gain searches (~0.1 ms vs ~80 ms for margins()); the reported margins come from margins().
+
+    Needs a continuous (unwrapped) phase. GM only counts crossings with |L| < 1, so it reads high on an unstable loop
+    (PM < 0); the searches reject those rows on PM first."""
     lw = np.log(w)
     pm, wc = math.inf, math.nan
     for i in _crossings(np.log(mag), 0.0):
@@ -171,6 +175,17 @@ def margins(mag: np.ndarray, phase_deg: np.ndarray, w: np.ndarray = _W_RATE) -> 
                 gm = min(gm, -20.0 * math.log10(m))
     s_max = float(np.max(1.0 / np.abs(1.0 + mag * np.exp(1j * np.radians(phase_deg)))))
     return Margins(float(pm), float(gm), float(wc), s_max)
+
+
+def margins(mag: np.ndarray, phase_deg: np.ndarray, w: np.ndarray = _W_RATE) -> Margins:
+    """Margins from |L| and phase on the grid w, by python-control (FRD data, so only crossings inside w count).
+
+    GM < 0 dB means the loop needs less gain (it is unstable at this gain). The sensitivity peak is taken on the grid:
+    python-control's stability margin only looks at local minima of |1 + L|."""
+    gm, pm, _sm, _wpc, wgc, _wms = control.stability_margins((mag, phase_deg, w))
+    gm_db = 20.0 * math.log10(gm) if np.isfinite(gm) and gm > 0 else math.inf
+    s_max = float(np.max(1.0 / np.abs(1.0 + mag * np.exp(1j * np.radians(phase_deg)))))
+    return Margins(float(pm), gm_db, float(wgc), s_max)
 
 
 def rate_loop(plant: Plant, row: PidRow, w: np.ndarray = _W_RATE, dt: float = DT_S) -> tuple[np.ndarray, np.ndarray]:
@@ -286,7 +301,7 @@ def design_rate(plant: Plant, cur: PidRow, spec: Spec = Spec()) -> Design:
                       margins={"current": m_cur}, itae={"current": j_cur})
     prop, note = _best_rate(plant, cur, box, spec), ""
     if prop is None:  # nothing inside the step box meets the spec: take the box point with the best PM
-        ms = [margins(*rate_loop(plant, r)) for r in box]
+        ms = [scan_margins(*rate_loop(plant, r)) for r in box]
         i = max(range(len(box)), key=lambda n: ms[n].pm_deg if ms[n].gm_db >= spec.gm_min_db else -math.inf)
         if not ms[i].pm_deg > m_cur.pm_deg:
             return Design("refused", f"no gains within +-{spec.step_frac:.0%} of current meet the spec or improve "
@@ -305,7 +320,7 @@ def _best_rate(plant: Plant, cur: PidRow, rows: list[PidRow], spec: Spec) -> Pid
     """Lowest step ITAE among rows that meet the margins, the noise-gain cap and do not saturate UMax; None if none."""
     hf_max = spec.hf_gain_ratio * hf_gain(cur)
     ok = [r for r in rows if hf_gain(r) <= hf_max
-          and margins(*rate_loop(plant, r)).meets(spec.pm_min_deg + spec.pm_buffer_deg, spec.gm_min_db, spec.s_max)]
+          and scan_margins(*rate_loop(plant, r)).meets(spec.pm_min_deg + spec.pm_buffer_deg, spec.gm_min_db, spec.s_max)]
     if not ok:
         return None
     itae, upk = step_itae(plant, np.array([r.kp for r in ok]), np.array([r.kd for r in ok]), cur, spec.step_dps)
@@ -322,7 +337,7 @@ def design_angle(plant: Plant, rate: PidRow, cur: PidRow, spec: Spec = Spec()) -
     target = spec.angle_wc_ratio * m_rate.wc_rps
     best, best_err = None, math.inf
     for kp in cur.kp * np.geomspace(1 / 3, 3, 61):
-        m = margins(*angle_loop(plant, rate, replace(cur, kp=kp)))
+        m = scan_margins(*angle_loop(plant, rate, replace(cur, kp=kp)))
         if m.meets(spec.angle_pm_min_deg, spec.gm_min_db, spec.s_max) and abs(math.log(m.wc_rps / target)) < best_err:
             best, best_err = kp, abs(math.log(m.wc_rps / target))
     m_cur = margins(*angle_loop(plant, rate, cur))
@@ -356,7 +371,7 @@ def design_outer(loop: str, plant: Plant, cur: PidRow, dt: float = DT_S,
     wc_cap = (inner_wc_rps / spec.outer_sep_min) if (inner_wc_rps and inner_wc_rps > 0) else math.inf
 
     def loop_m(r: PidRow) -> Margins:
-        return margins(*rate_loop(plant, r, w=w_grid, dt=dt), w=w_grid)
+        return scan_margins(*rate_loop(plant, r, w=w_grid, dt=dt), w=w_grid)
 
     m_cur = loop_m(cur)
     j_cur = float(step_itae(plant, cur.kp, cur.kd, cur, step_amp, t_end_s=t_horizon, dt=dt)[0][0])
