@@ -44,12 +44,17 @@ def flights_of_day(date: str) -> list[dict]:
 
 
 def load(session: Path) -> pd.DataFrame:
-    df = pd.read_csv(session / "telemetry.csv", usecols=["received_ns", "key", "value"])
-    df["key"] = df["key"].str.replace(r"^slot\d+\.(?=g_ext_pos|mymotor)", "", regex=True)
-    imu = df.key.isin(["slot0.imu_data.rol", "slot0.imu_data.pit"])
-    df = df[~df.key.str.startswith("slot") | imu]
-    df["value"] = pd.to_numeric(df["value"], errors="coerce")
-    w = df.pivot_table(index="received_ns", columns="key", values="value", aggfunc="last").sort_index().ffill()
+    df = pd.read_csv(session / "telemetry.csv", usecols=["received_ns", "key", "value"], dtype={"key": "category"})
+    # Rename and filter the few distinct keys, then map back by code: the per-row regex took minutes on long logs.
+    cats = pd.Series(df["key"].cat.categories, dtype=object)
+    names = cats.str.replace(r"^slot\d+\.(?=g_ext_pos|mymotor)", "", regex=True)
+    keep = (~names.str.startswith("slot") | names.isin(["slot0.imu_data.rol", "slot0.imu_data.pit"])).to_numpy()
+    codes = df["key"].cat.codes.to_numpy()
+    sel = (codes >= 0) & keep[np.maximum(codes, 0)]
+    df = pd.DataFrame({"received_ns": df["received_ns"].to_numpy()[sel], "key": names.to_numpy()[codes[sel]],
+                       "value": pd.to_numeric(df["value"], errors="coerce").to_numpy()[sel]}).dropna(subset=["value"])
+    df = df.drop_duplicates(["received_ns", "key"], keep="last")   # pivot_table(aggfunc="last") without its cost
+    w = df.pivot(index="received_ns", columns="key", values="value").sort_index().ffill()
     w.index = (w.index - w.index[0]) / 1e9
     xy = [c for c in w.columns if re.fullmatch(r"Ctrler\.loc[xy]s?PID\.(Des|FB|U)", c)]
     w[xy] = w[xy] / 100.0                       # firmware xy loops run in cm and cm/s; z in m: analyse everything in m

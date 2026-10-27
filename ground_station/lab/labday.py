@@ -30,6 +30,7 @@ import argparse
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -479,6 +480,8 @@ def bad_end(rc, ev):
 
 COOLDOWN_S = 90   # PROPOSED, not measured: motor and pack rest after a landing; day file `cooldown_s`, --cooldown S
 PLOT_TIMEOUT_S = 120   # PROPOSED, not measured: background per-flight plot timeout
+DRY_RUN_JOBS = 3   # parallel ground dry runs at the deck start (laptop: 4 cores, fragile AC under load)
+CAMERA_STOP_TIMEOUT_S = 40   # PROPOSED: the stop normally takes up to 20 s (comment in one()); 2x that, then kill
 
 PLOT_CAPTIONS = {
     "tracking.png": "Position, attitude, and motor tracking vs reference.",
@@ -1074,6 +1077,8 @@ class Day:
         if self.cam:   # --floor, else the day's last good scan (labday made it), else the day file's
             self.cam["floor"] = floor or self.state.get("floor") or self.cam.get("floor")
         self.cards = {}
+        self._score_q = None
+        self._score_lock = threading.Lock()
 
     def gains_arg(self):
         """Path string to <state dir>/<day>-gains.json when active for this day, else None."""
@@ -1118,31 +1123,40 @@ class Day:
         bad, passed, same = [], self.state.setdefault("dry_ok", {}), 0
         stamp = code_stamp()
         gains = self.gains_arg()
+        todo_ = []
         for f in flights:
             key = dry_key(f, self.pack, stamp, gains=gains)
             if key is not None and passed.get(f["id"]) == key:
                 same += 1
                 continue
-            r = self.run(fly_cmd(f, self.pack, dry=True, gains=gains), cwd=ROOT, capture_output=True, text=True,
-                         stdin=subprocess.DEVNULL)
-            ok = r.returncode == 0
-            self.say(f"  dry run {f['id']:<4} {f['fly']:<26} {'OK' if ok else 'FAILED'}")
-            if ok and key is not None:
-                passed[f["id"]] = key
-                self.save()   # each pass now, so a Ctrl-C halfway keeps the passes already made
-            if not ok:
-                passed.pop(f["id"], None)
-                bad.append(f["id"])
-                self.say(*["      " + s for s in ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-8:]])
+            todo_.append((f, key))
+
+        def one(fk):
+            return self.run(fly_cmd(fk[0], self.pack, dry=True, gains=gains), cwd=ROOT, capture_output=True,
+                            text=True, stdin=subprocess.DEVNULL)
+        # Independent ground-only subprocesses: DRY_RUN_JOBS at once, reported in plan order.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=DRY_RUN_JOBS) as ex:
+            for (f, key), r in zip(todo_, ex.map(one, todo_)):
+                ok = r.returncode == 0
+                self.say(f"  dry run {f['id']:<4} {f['fly']:<26} {'OK' if ok else 'FAILED'}")
+                if ok and key is not None:
+                    passed[f["id"]] = key
+                    self.save()   # each pass now, so a Ctrl-C halfway keeps the passes already made
+                if not ok:
+                    passed.pop(f["id"], None)
+                    bad.append(f["id"])
+                    self.say(*["      " + s for s in ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-8:]])
         if same:
             self.say(f"  dry run: {same} flight(s) unchanged since their last pass, not re-run")
         self.save()
         events.log("labday_dry_run", day=self.d.get("day"), n=len(flights), cached=same, failed=bad)
         return bad
 
-    def camera(self, *args):
+    def camera(self, *args, timeout=None):
         env = {**os.environ, "CT_FLOOR": f"logs/video_truth/{self.cam.get('floor', '')}"}
-        return self.run([git_bash(), CAMERA_SH, *args], cwd=ROOT, env=env, stdin=subprocess.DEVNULL).returncode
+        kw = {} if timeout is None else {"timeout": timeout}
+        return self.run([git_bash(), CAMERA_SH, *args], cwd=ROOT, env=env, stdin=subprocess.DEVNULL, **kw).returncode
 
     def floor_scan(self):
         """The floor scan before the first flight and on `f`: scan (drone out of view) until floor_check passes, or k
@@ -1269,7 +1283,12 @@ class Day:
     def camera_stop(self, name):
         (VIDEO_DIR / name).mkdir(parents=True, exist_ok=True)
         (VIDEO_DIR / name / "stop").touch()
-        events.log("labday_camera_stop", name=name, rc=self.camera("stop", name))
+        try:   # the stop hung forever on 10-28 and the operator had to Ctrl+C the deck: bound it
+            rc = self.camera("stop", name, timeout=CAMERA_STOP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            rc = None
+            self.say(f"  camera stop: no exit in {CAMERA_STOP_TIMEOUT_S:g} s, killed; the video so far is kept")
+        events.log("labday_camera_stop", name=name, rc=rc)
 
     def fly(self, f, pack):
         """One `.\\fly <name> --once`, stdin passed through: (exit code, its debrief event or None)."""
@@ -1950,8 +1969,8 @@ class Day:
                     "no voltage from the drone" if v is None else f"{v:.2f} V just after landing"
                     + (f", sag {self.rest_v - v:.2f} V from {self.rest_v:.2f} V resting" if self.rest_v else "")))
                 self.start_plots(f, folder)
-                self.score(f)
                 is_verify_hover = "verify-hover" in str(f.get("id", "")) or bool(f.get("verify_hover"))
+                self.score(f, wait=is_verify_hover)   # only a verify-hover card is needed before the next prompt
                 if why is None:
                     card = self.cards.get(f["id"])
                     card_failed = bool(
@@ -2105,32 +2124,84 @@ class Day:
         t.start()
         t.join(timeout=0.02)
 
-    def score(self, f):
+    def score(self, f, wait=False):
         """The one-line scorecard of the flight just flown, then docs/lab/days/<day>-report.md rebuilt from every
-        flown flight with a log folder (so a resumed day still reports all of them). Never stops the day."""
+        flown flight with a log folder (so a resumed day still reports all of them). Queued on one background
+        worker so the next flight's prompt never waits on the analysis; `wait` scores now (a verify-hover card
+        decides the next step). Each card is cached in <folder>/scorecard.json, so a resumed day scores only new
+        flights. Never stops the day."""
+        if wait:
+            return self._score_now(f)
+        if self._score_q is None:
+            self._score_q = queue.Queue()
+            threading.Thread(target=self._score_worker, daemon=True).start()
+        self._score_q.put(f)
+
+    def _score_worker(self):
+        while True:
+            f = self._score_q.get()
+            try:
+                self._score_now(f)
+            finally:
+                self._score_q.task_done()
+
+    def drain(self, timeout_s=300.0):
+        """Wait (bounded) for queued scores, so the day report is whole when the deck exits."""
+        q = self._score_q
+        if q is None or not q.unfinished_tasks:
+            return
+        self.say(f"  finishing {q.unfinished_tasks} background score(s) (Ctrl+C leaves them; the next run redoes them)")
+        end = time.monotonic() + timeout_s
+        while q.unfinished_tasks and time.monotonic() < end:
+            time.sleep(0.2)
+
+    def _card(self, folder, plan_f, camera, fresh):
+        from ground_station.analysis import scorecard
+        cache = folder / "scorecard.json"
+        if not fresh and cache.is_file():
+            try:
+                return json.loads(cache.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass
+        card = scorecard.score_flight(folder, plan_f, camera=camera, events_dir=events.root())
         try:
-            from ground_station.analysis import scorecard
-            plan = {g["id"]: g for g in self.d["flights"]}
-            self.cards.pop(f["id"], None)
-            for fid, s in self.state["flown"].items():
-                folder = ROOT / s["folder"] if s.get("folder") else None
-                if fid not in self.cards and folder is not None and folder.is_dir():
-                    self.cards[fid] = scorecard.score_flight(folder, plan.get(fid, {"id": fid}),
-                                                             camera=s.get("camera"), events_dir=events.root())
-            if f["id"] not in self.cards:
-                self.say(f"score {f['id']}: no log folder, nothing to score")
-                return
-            self.say(scorecard.one_line(self.cards[f["id"]]))
-            if self.d.get("day"):
-                cards = [self.cards[g] for g in plan if g in self.cards]
-                self.say(f"report {rel(scorecard.write_day_report(str(self.d['day']), cards, REPORT_DIR))}")
-        except Exception as e:  # noqa: BLE001 - a scoring bug must not stop a lab day
-            self.say(f"score {f['id']}: scorecard failed ({type(e).__name__}: {e})")
+            cache.write_text(json.dumps(card, default=lambda o: o.item() if hasattr(o, "item") else str(o)),
+                             encoding="utf-8")
+        except (OSError, TypeError, ValueError):
+            pass
+        return card
+
+    def _score_now(self, f):
+        with self._score_lock:
+            try:
+                from ground_station.analysis import scorecard
+                plan = {g["id"]: g for g in self.d["flights"]}
+                self.cards.pop(f["id"], None)
+                for fid, s in list(self.state["flown"].items()):
+                    folder = ROOT / s["folder"] if s.get("folder") else None
+                    if fid not in self.cards and folder is not None and folder.is_dir():
+                        self.cards[fid] = self._card(folder, plan.get(fid, {"id": fid}), s.get("camera"),
+                                                     fresh=fid == f["id"])
+                if f["id"] not in self.cards:
+                    self.say(f"score {f['id']}: no log folder, nothing to score")
+                    return
+                self.say(scorecard.one_line(self.cards[f["id"]]))
+                if self.d.get("day"):
+                    cards = [self.cards[g] for g in plan if g in self.cards]
+                    self.say(f"report {rel(scorecard.write_day_report(str(self.d['day']), cards, REPORT_DIR))}")
+            except Exception as e:  # noqa: BLE001 - a scoring bug must not stop a lab day
+                self.say(f"score {f['id']}: scorecard failed ({type(e).__name__}: {e})")
 
     def save(self):
         save_state(self.state_path, self.state)
 
     def go(self, start=None):
+        try:
+            return self._go(start)
+        finally:
+            self.drain()   # every exit, q included: the day report is whole when the deck closes
+
+    def _go(self, start=None):
         flights = todo(self.d, self.state, start)
         if not flights:
             self.say(f"{self.d.get('day')}: every flight is flown or skipped ({rel(self.state_path)}).")

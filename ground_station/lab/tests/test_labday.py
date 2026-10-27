@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1506,3 +1507,50 @@ def test_a13_revert_end_to_end_a_through_h(tmp_path, monkeypatch, capsys):
     assert float(p_e.gains["values"]["9"]) == pytest.approx(3.5)
 
 
+
+
+def test_score_runs_in_the_background_and_a_resume_rescores_only_new_flights(tmp_path, monkeypatch):
+    """10-28: the deck scored synchronously and a resumed day re-scored every flown flight before the next prompt.
+    The score is queued (the prompt does not wait), each card is cached in <folder>/scorecard.json, and a resume
+    scores only the flight just flown."""
+    import threading as th
+    from ground_station.analysis import scorecard
+    for n in ("a", "b"):
+        (tmp_path / n).mkdir()
+    gate, calls = th.Event(), []
+
+    def slow(folder, plan_f, **kw):
+        calls.append(Path(folder).name)
+        gate.wait(5)
+        return {"id": plan_f["id"], "fly": "x", "verdict": "pass"}
+    monkeypatch.setattr(scorecard, "score_flight", slow)
+    monkeypatch.setattr(scorecard, "one_line", lambda c: f"score {c['id']}")
+    monkeypatch.setattr(scorecard, "write_day_report", lambda d, cards, rd: tmp_path / "r.md")
+    monkeypatch.setattr(labday, "ROOT", tmp_path)
+    d = _day(tmp_path, [{"id": "A", "fly": "lab_c_robust"}, {"id": "B", "fly": "lab_c_lqr"}])
+    p = labday.Day(d, tmp_path / "state.json", pack="2", ask=lambda q: "", run=None, popen=None)
+    p.state["flown"] = {"A": {"folder": "a"}}
+    t0 = time.monotonic()
+    p.score({"id": "A"})
+    assert time.monotonic() - t0 < 1.0          # queued: returns while the scorer is still blocked
+    gate.set()
+    p.drain(timeout_s=5)
+    assert calls == ["a"] and (tmp_path / "a" / "scorecard.json").is_file()
+    q = labday.Day(d, tmp_path / "state.json", pack="2", ask=lambda q: "", run=None, popen=None)   # resumed deck
+    q.state["flown"] = {"A": {"folder": "a"}, "B": {"folder": "b"}}
+    q.score({"id": "B"}, wait=True)
+    assert calls == ["a", "b"] and q.cards["A"]["verdict"] == "pass"   # A from its cache, only B scored
+
+
+def test_camera_stop_is_bounded(tmp_path, monkeypatch):
+    """10-28: `camera.sh stop` hung forever and the operator had to Ctrl+C the deck after every flight."""
+    said = []
+    monkeypatch.setattr(labday, "VIDEO_DIR", tmp_path)
+
+    def hang(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+    d = _day(tmp_path, [{"id": "A", "fly": "lab_c_robust"}])
+    p = labday.Day(d, tmp_path / "state.json", pack="2", ask=lambda q: "", run=hang, popen=None)
+    p.say = lambda *a: said.extend(a)
+    p.camera_stop("cam1")
+    assert any("camera stop: no exit in" in s for s in said) and (tmp_path / "cam1" / "stop").is_file()
