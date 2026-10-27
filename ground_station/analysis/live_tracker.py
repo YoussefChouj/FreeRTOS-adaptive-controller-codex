@@ -1335,8 +1335,9 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         z = height_m(t_cap) if callable(height_m) else height_m
         height_ok = z is not None and valid_height(cam, z)
         if not height_ok and t_read - t_height_warn >= 5.0:
-            print(f"HEIGHT INVALID {z!r} m: outside floor/camera geometry; no camera fix sent. Check range and firmware.",
-                  flush=True)
+            stale = z is None or not np.isfinite(z)        # 10-27/28: every "nan" was the pad start-up, 8081 not streaming yet
+            print(f"HEIGHT INVALID {z!r} m: " + ("no fresh height telemetry (8081 stream); " if stale else
+                  "outside floor/camera geometry; ") + "no camera fix sent.", flush=True)
             t_height_warn = t_read
         z_agl = (max(0.0, float(z) - float(getattr(height_m, "ring_h", 0.0)))
                  if height_ok else 0.0)
@@ -1378,8 +1379,10 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         no_fix = n_det > 0 and t_read - t_nf >= 3.0
         if no_fix and t_read - t_nf_warn >= 5.0:
             t_nf_warn = t_read
+            why = ("height invalid" if not height_ok else "learning the pad" if getattr(ring, "learn_n", 0) else
+                   f"window {sched.window_s():.2f} s")   # the first two clear the buffer: start-up on the pad, not a track loss
             print(f"WARN no fix sent for {t_read - t_nf:.0f} s: det {n_det}/{n} skipped {sched.n_skip} "
-                  f"window {sched.window_s():.2f} s; the drone flies on flow alone", flush=True)
+                  f"({why}); the drone flies on flow alone", flush=True)
         if show is not None:
             show(t_read, frame, uv, xy, ([f"NO FIX SENT {t_read - t_nf:.0f} s - FLOW ONLY"] if no_fix else []) +
                  ([] if height_ok else [f"HEIGHT INVALID {z!r} m - NO CAMERA FIX"]) +
