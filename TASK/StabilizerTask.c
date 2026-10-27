@@ -1253,7 +1253,7 @@ static uint8_t  s_alt_cf_inited    = 0U;
 static uint8_t  s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 static uint8_t  s_alt_armed_prev   = 0U;
 static uint16_t s_alt_cf_steps     = 0U;
-static uint8_t s_alt_sample_mode = ALT_TOF_SAMPLE_LEGACY;
+static uint8_t s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 static uint8_t s_alt_delay_ticks = 0U;
 static uint8_t s_alt_spread_mode = 0U;
 /* At most one packet starts per tick; each lives at most 20 ticks (100 ms).
@@ -1271,7 +1271,7 @@ static uint8_t s_alt_cf_head = 0U;
 static uint8_t s_alt_cf_history_n = 1U;
 
 /* Altitude complementary filter, one row per gain set; runtime state starts at 0.
-   @k1      -        [0, 1]     height correction per ToF sample
+   @k1      -        [0, 3]     height correction per design sample (scaled mode caps k1*dt_c/Ts at ALT_CF_K1_EFF_MAX)
    @k2      1/s      [0, 50]    climb-rate correction per ToF sample, per m of error
    @k3      1/s^2    [0, 5]     accel-bias correction per ToF sample (0 = off)
    @AccMax  m/s^2    [0, 30]    clamp on world-up linear accel */
@@ -1280,24 +1280,58 @@ static uint8_t s_alt_cf_history_n = 1U;
 
 static const AltCfGains s_alt_cf_gains[] = {
 /*             k1     k2     k3     AccMax    set */
-    ALT_CF_ROW(0.21f, 0.45f, 0.1f,  20.0f)  /* nominal  PROPOSED, S1 closed-loop sim */
+    ALT_CF_ROW(1.005f, 5.10f, 0.50f, 20.0f)   /* nominal  PROPOSED, ladder replay 2026-10-27 (wn 10, zeta 1.0, p 0.1; flew wn 16) */
 };
 
 /* Continuous observer derivation (design 20 Hz, PROPOSED model):
  * hdot=v+L1*(y-h), vdot=a-b+L2*(y-h), bdot=-L3*(y-h).
  * det(sI-A)=s^3+L1*s^2+L2*s+L3, L=[k1,k2,k3]/Ts.
- * Here s^3+4.2*s^2+9*s+2: roots -1.9752204 +/- 2.0279634j,
- * -0.2495592 1/s; pair wn=2.8309241 rad/s, zeta=0.6977299,
- * bias tau=4.0070656 s. These are model poles, not flown measurements;
+ * Here s^3+20.1*s^2+102*s+10 = (s+10)^2 (s+0.1): double pole at -10 rad/s
+ * (wn 10, zeta 1.0), bias tau 10 s. These are model poles, not flown measurements;
  * packet spreading and sampled fusion have additional discrete dynamics.
  * Change history (newest first)
  * nominal
+ *   2026-10-27 k1=1.005, k2=5.10, k3=0.50, AccMax=20.0 (scaled mode): PROPOSED, L=20.1/102/10 (wn 10 rad/s, zeta 1.0, bias pole 0.1 rad/s). Open-loop replay of the z-accel ladder (0.4-1.2 m, 118 s airborne; replay of the flown wn 16 row reproduced the logged vz exactly). rms vz err vs 0.1 s smoothed dToF, tune half / held-out half: 0.117/0.102 m/s vs 0.131/0.113 flown; vz HF noise 0.063 vs 0.109 m/s
+ *   2026-10-27 k1=1.285, k2=12.93, k3=1.28, AccMax=20.0 (scaled mode): PROPOSED, L=25.7/258.6/25.6 (wn 16 rad/s, zeta 0.8, bias pole 0.1 rad/s). wn 8 hover still swung 0.24 Hz with vz/dToF 0.41/+56 deg (accel error 2.8x true accel there); replay of six hovers: wn 8/12/16/20/25 gave +56/+22/+13/+9/+6 deg at vz noise 0.022/0.027/0.035/0.044/0.058 m/s (raw dToF 0.066); per-sample k1*s capped at ALT_CF_K1_EFF_MAX after ToF gaps
+ *   2026-10-27 k1=0.64, k2=3.2, k3=0.32, AccMax=20.0 (scaled mode): PROPOSED, L=12.8/64/6.4 (wn 8 rad/s, zeta 0.8, bias pole 0.1 rad/s = tau 10 s, 8x below the swing). Five hovers: raw accel/ddToF 2.0-2.7x at the 0.12-0.18 Hz swing, so vz must follow ToF there; replay of the logged ToF+accel gave vz/dToF +16 deg (was +61) at +12% vz noise
  *   2026-10-26 k1=0.21, k2=0.45, k3=0.1, AccMax=20.0: PROPOSED from S1 closed-loop sim (wn=3 rad/s, zeta=0.7 at Ts=0.05 s; poles |z|=0.894, 0.894, 0.988; dU p99 19.9x lower than FD)
  */
 
+/* Altitude Kalman filter (g_alt_vz_mode 3), one row per gain set; same states, accel and predict as the CF.
+   @SigAcc   m/s^2          [0.1, 5]      accel noise on h and vz (process noise Q)
+   @SigBias  m/s^2/sqrt(s)  [0, 0.5]      accel-bias random walk (process noise Q)
+   @SigTof   m              [0.002, 0.1]  ToF noise per accepted sample (measurement noise R)
+   @Huber    -              [0, 5]        innovation sigmas before the update is softened (0 = off)
+   @Gate     -              [0, 6]        innovation sigmas before a sample is rejected (0 = off: jump gate + hard resync)
+   @ReacqS   s              [0.05, 2]     rejecting this long starts the soft re-acquire
+   @StepMax  m              [0, 0.05]     largest h change from one update (0 = off) */
+#define ALT_KF_ROW(SigAcc, SigBias, SigTof, Huber, Gate, ReacqS, StepMax) \
+    { SigAcc, SigBias, SigTof, Huber, Gate, ReacqS, StepMax }
+
+static const AltKfGains s_alt_kf_gains[] = {
+/*             SigAcc SigBias SigTof Huber Gate  ReacqS StepMax   set */
+    ALT_KF_ROW(1.0f,  0.005f, 0.03f, 0.0f, 3.0f, 0.3f,  0.01f)   /* robust   PROPOSED, gate replay 2026-10-27, not flown */
+};
+
+/* x = [h, vz, b_az], a_up = a_raw - b_az, dt = STAB_DT_S:
+ * F = [[1, dt, -dt^2/2], [0, 1, -dt], [0, 0, 1]], Q = G G' SigAcc^2 + diag(0, 0, SigBias^2 dt), G = [dt^2/2, dt, 0].
+ * Update on each accepted ToF sample: S = P00 + SigTof^2, Huber: S = max(S, (e/Huber)^2), K = P[:,0]/S.
+ * Gate > 0: the KF fuses the median of the last 3 frames (band gate only, no jump gate or hard resync), rejects
+ * e^2 > Gate^2 S, and after ReacqS of rejects fuses again with S raised so |dh| <= StepMax (soft re-acquire, no snap).
+ * Change history (newest first)
+ * robust
+ *   2026-10-27 SigTof=0.03, Gate=3, ReacqS=0.3, StepMax=0.01, median 3: PROPOSED, open-loop replay of the FD/CF/KF ladder hold segments: the hard resync (20 rejects -> h snaps to ToF, median 8 cm) gave 13-20 h snaps/min; R 3 cm 0/min, gate 3 sigma + median 3 with a hard 0.5 s reset 0-3.3/min. Soft re-acquire not replayed; score closed-loop
+ * nominal
+ *   2026-10-27 SigAcc=1.0, SigBias=0.005, SigTof=0.01, Huber=0: PROPOSED, open-loop replay of the z-accel ladder (same method as the CF row). rms vz err tune / held-out half 0.114/0.098 m/s vs 0.131/0.113 flown CF; vz HF noise 0.060 m/s. Huber 2.5 scored 0.122 (softens real steps); hover a_raw std 0.92-0.95 m/s^2 at 0.8-1.2 m, 1.10-1.34 at 0.4 m confirms SigAcc 1.0
+ *   2026-10-27 SigAcc=1.0, SigBias=0.02, SigTof=0.01, Huber=2.5: PROPOSED, open-loop replay of the logged ToF+accel, every accepted sample fused. 19:25 hover: vz HF noise 0.042 vs 0.090 m/s for the flown CF wn 16, vz kick at 15 ToF jumps >= 3 cm 0.156 vs 0.231 m/s, rms vz err vs zero-phase ToF 0.075 vs 0.085; 19:02 hover 0.062/0.154/0.041. SigAcc 2.0 raised kicks to 0.18; fusing only changed ToF values did not help (rms 0.089)
+ */
+static float s_alt_kf_P[3][3];
+static float s_alt_kf_rej_s;
+volatile uint16_t g_alt_kf_rej_cnt = 0U;  /* telemetry: ToF samples rejected by the KF gate */
+
 volatile uint8_t g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
-volatile uint8_t g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
-volatile uint8_t g_alt_tof_sample_mode = ALT_TOF_SAMPLE_LEGACY;
+volatile uint8_t g_alt_cf_rate_mode = ALT_CF_RATE_SCALED;
+volatile uint8_t g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 volatile uint8_t g_alt_tof_delay_ticks = 0U;
 volatile uint8_t g_alt_cf_spread_mode = 0U;
 volatile uint8_t g_alt_cf_disarmed_test = 0U;
@@ -1421,6 +1455,84 @@ static void Alt_CfSpreadApply(void)
     }
 }
 
+static void Alt_KfReset(void)
+{
+	int i;
+	int j;
+	for (i = 0; i < 3; i++) {
+		for (j = 0; j < 3; j++) s_alt_kf_P[i][j] = 0.0f;
+	}
+	s_alt_kf_P[0][0] = 1.0e-4f;
+	s_alt_kf_P[1][1] = 1.0e-2f;
+	s_alt_kf_P[2][2] = 1.0e-2f;
+	s_alt_kf_rej_s = 0.0f;
+}
+
+/* P = F P F' + Q for one STAB_DT_S step; the mean is predicted by the shared CF code. */
+static void Alt_KfPredict(const AltKfGains *kg)
+{
+	const float dt = STAB_DT_S;
+	const float F[3][3] = { { 1.0f, dt, -0.5f * dt * dt }, { 0.0f, 1.0f, -dt }, { 0.0f, 0.0f, 1.0f } };
+	const float G[3] = { 0.5f * dt * dt, dt, 0.0f };
+	float FP[3][3];
+	int i;
+	int j;
+	int k;
+	for (i = 0; i < 3; i++) {
+		for (j = 0; j < 3; j++) {
+			FP[i][j] = 0.0f;
+			for (k = 0; k < 3; k++) FP[i][j] += F[i][k] * s_alt_kf_P[k][j];
+		}
+	}
+	for (i = 0; i < 3; i++) {
+		for (j = 0; j < 3; j++) {
+			float v = G[i] * G[j] * kg->SigAcc * kg->SigAcc;
+			for (k = 0; k < 3; k++) v += FP[i][k] * F[j][k];
+			s_alt_kf_P[i][j] = v;
+		}
+	}
+	s_alt_kf_P[2][2] += kg->SigBias * kg->SigBias * dt;
+}
+
+/* Fuse innovation e into alt_cf (h, vz, b_az) and shrink P; the caller clamps b_az.
+ * dt_c is the time since the previous ToF sample, for the reject timer. */
+static void Alt_KfCorrect(const AltKfGains *kg, float e, float dt_c)
+{
+	float S = s_alt_kf_P[0][0] + kg->SigTof * kg->SigTof;
+	float K[3];
+	float P0[3];
+	int i;
+	int j;
+	if (kg->Gate > 0.0f && e * e > kg->Gate * kg->Gate * S) {
+		if (s_alt_kf_rej_s < kg->ReacqS) {
+			s_alt_kf_rej_s += dt_c;
+			g_alt_kf_rej_cnt++;
+			return;
+		}
+		/* Re-acquire: keep fusing step-capped until a sample passes the gate. */
+	} else {
+		s_alt_kf_rej_s = 0.0f;
+	}
+	if (kg->StepMax > 0.0f) {
+		float s_step = s_alt_kf_P[0][0] * fabsf(e) / kg->StepMax;
+		if (s_step > S) S = s_step;
+	}
+	if (kg->Huber > 0.0f) {
+		float s_e = (e / kg->Huber) * (e / kg->Huber);
+		if (s_e > S) S = s_e;
+	}
+	for (i = 0; i < 3; i++) {
+		K[i] = s_alt_kf_P[i][0] / S;
+		P0[i] = s_alt_kf_P[0][i];
+	}
+	alt_cf.h    += K[0] * e;
+	alt_cf.vz   += K[1] * e;
+	alt_cf.b_az += K[2] * e;
+	for (i = 0; i < 3; i++) {
+		for (j = 0; j < 3; j++) s_alt_kf_P[i][j] -= K[i] * P0[j];
+	}
+}
+
 void Alt_CfReset(float h_init, uint8_t zero_bias)
 {
 	alt_cf.h = h_init;
@@ -1440,6 +1552,7 @@ void Alt_CfReset(float h_init, uint8_t zero_bias)
 	s_alt_cf_inited = (h_init > 0.0f) ? 1U : 0U;
 	s_alt_vz_mode_prev = g_alt_vz_mode;
 	Alt_CfHistoryReset();
+	Alt_KfReset();
 }
 
 /* Altitude sanity gate (of_alt_cm is cm, u32; clamped to u16 below). Three layers (ADR-0011 Z-gate),
@@ -1465,9 +1578,11 @@ void Alt_UpdateFB(void)
 	uint8_t armed;
 	uint8_t newest;
 	uint8_t median_ok = 1U;
+	uint8_t kf_gate;
 	uint8_t diagnostic;
 	float a_up;
 	const AltCfGains *g = &s_alt_cf_gains[0];
+	const AltKfGains *kg = &s_alt_kf_gains[0];
 
 	/* Pending writes are latched only while disarmed. FD retains its original gate.
 	 * alt_update_cnt counts decoded ANOOF_FN_ALT frames, not sensor conversions;
@@ -1491,7 +1606,8 @@ void Alt_UpdateFB(void)
 	alt_cf.sample_mode = s_alt_sample_mode;
 	alt_cf.delay_ticks = s_alt_delay_ticks;
 	alt_cf.spread_mode = s_alt_spread_mode;
-	newest = (uint8_t)(g_alt_vz_mode == ALT_VZ_MODE_CF && s_alt_sample_mode == ALT_TOF_SAMPLE_NEWEST);
+	newest = (uint8_t)(g_alt_vz_mode != ALT_VZ_MODE_FD && s_alt_sample_mode == ALT_TOF_SAMPLE_NEWEST);
+	kf_gate = (uint8_t)(g_alt_vz_mode == ALT_VZ_MODE_KF && kg->Gate > 0.0f);
 	cnt_changed = (uint8_t)(ano_of.alt_update_cnt != s_alt_cnt_prev);
 	s_alt_cnt_prev = ano_of.alt_update_cnt;
 
@@ -1517,7 +1633,9 @@ void Alt_UpdateFB(void)
 			alt_med = s_alt_hist[0];  /* warmup: not enough history yet */
 		}
 
-		if (newest) {
+		if (newest && kf_gate) {
+			/* KF gate mode fuses the median; the KF innovation gate replaces the jump gate. */
+		} else if (newest) {
 			float gate = ALT_JUMP_BASE_M + ALT_JUMP_PER_VZ * fabsf(Ctrler.Z_ratePID.Des);
 			if (gate > ALT_JUMP_MAX_M) gate = ALT_JUMP_MAX_M;
 			/* Fusing a causal median would still delay a ramp by one frame.
@@ -1534,7 +1652,7 @@ void Alt_UpdateFB(void)
 			float gate = ALT_JUMP_BASE_M + ALT_JUMP_PER_VZ * fabsf(Ctrler.Z_ratePID.Des);
 			uint8_t jump_ok;
 			if (gate > ALT_JUMP_MAX_M) gate = ALT_JUMP_MAX_M;
-			jump_ok = (uint8_t)(fabsf(h_new - ano_of.of2_raw_h) < gate);
+			jump_ok = (uint8_t)(kf_gate || fabsf(h_new - ano_of.of2_raw_h) < gate);
 			if( jump_ok || s_alt_reject_cnt >= ALT_RESYNC_REJECTS )
 			{
 				ano_of.of2_raw_h = h_new;
@@ -1570,13 +1688,13 @@ void Alt_UpdateFB(void)
 	}
 
 	armed = ALT_IS_ARMED();
-	if (g_alt_vz_mode > ALT_VZ_MODE_CF) {
+	if (g_alt_vz_mode != ALT_VZ_MODE_FD && g_alt_vz_mode != ALT_VZ_MODE_CF && g_alt_vz_mode != ALT_VZ_MODE_KF) {
 		g_alt_vz_mode = s_alt_vz_mode_prev;
 	}
 	if (armed && g_alt_vz_mode != s_alt_vz_mode_prev) {
 		g_alt_vz_mode = s_alt_vz_mode_prev;
 	} else if (!armed && g_alt_vz_mode != s_alt_vz_mode_prev) {
-		if (s_alt_vz_mode_prev == ALT_VZ_MODE_FD && g_alt_vz_mode == ALT_VZ_MODE_CF) {
+		if (g_alt_vz_mode != ALT_VZ_MODE_FD) {
 			Alt_CfReset(ano_of.of2_h, 0U);
 		}
 		s_alt_vz_mode_prev = g_alt_vz_mode;
@@ -1627,6 +1745,7 @@ void Alt_UpdateFB(void)
 		if (s_alt_cf_steps < 65535U) s_alt_cf_steps++;
 		alt_cf.h  += alt_cf.vz * STAB_DT_S + 0.5f * alt_cf.a_up * STAB_DT_S * STAB_DT_S;
 		alt_cf.vz += alt_cf.a_up * STAB_DT_S;
+		if (g_alt_vz_mode == ALT_VZ_MODE_KF) Alt_KfPredict(kg);
 		if (s_alt_spread_mode) Alt_CfSpreadPredict();
 		Alt_CfHistoryPush();
 		if (sample_accepted) {
@@ -1643,10 +1762,18 @@ void Alt_UpdateFB(void)
 			alt_cf.y_corr = ano_of.of2_h;
 			s_alt_cf_steps = 0U;
 			alt_cf.e     = ano_of.of2_h - ((delay == 0U) ? alt_cf.h : s_alt_cf_history[index][0]);
-			if (alt_cf.mode == ALT_CF_RATE_SCALED) {
-				float k1_eff = g->k1 * alt_cf.dt_c / ALT_CF_TS_DESIGN;
-				float k2_eff = g->k2 * alt_cf.dt_c / ALT_CF_TS_DESIGN;
-				float k3_eff = g->k3 * alt_cf.dt_c / ALT_CF_TS_DESIGN;
+			if (g_alt_vz_mode == ALT_VZ_MODE_KF) {
+				Alt_KfCorrect(kg, alt_cf.e, alt_cf.dt_c);
+			} else if (alt_cf.mode == ALT_CF_RATE_SCALED) {
+				float scale = alt_cf.dt_c / ALT_CF_TS_DESIGN;
+				float k1_eff;
+				float k2_eff;
+				float k3_eff;
+				/* After a ToF gap a high-bandwidth row would overshoot (k1*s > 1); cap the height step, keep k2/k3 in ratio. */
+				if (g->k1 * scale > ALT_CF_K1_EFF_MAX) scale = ALT_CF_K1_EFF_MAX / g->k1;
+				k1_eff = g->k1 * scale;
+				k2_eff = g->k2 * scale;
+				k3_eff = g->k3 * scale;
 				alt_cf.h    += k1_eff * alt_cf.e;
 				alt_cf.vz   += k2_eff * alt_cf.e;
 				alt_cf.b_az -= k3_eff * alt_cf.e;
@@ -1682,6 +1809,7 @@ void Alt_UpdateFB(void)
 			alt_cf.e = ano_of.of2_h - alt_cf.h;
 			alt_cf.h = ano_of.of2_h;
 			s_alt_cf_inited = 1U;
+			Alt_KfReset();
 		}
 	}
 
@@ -1692,7 +1820,7 @@ void Alt_UpdateFB(void)
 		/* Diagnostic state is telemetry only: keep controller FB on the range/FD path. */
 		Ctrler.Z_posPID.FB = ano_of.of2_h;
 		Ctrler.Z_ratePID.FB = ano_of.of2_h_f2_v;
-	} else if (g_alt_vz_mode == ALT_VZ_MODE_CF) {
+	} else if (g_alt_vz_mode == ALT_VZ_MODE_CF || g_alt_vz_mode == ALT_VZ_MODE_KF) {
 		Ctrler.Z_posPID.FB  = alt_cf.h;
 		Ctrler.Z_ratePID.FB = alt_cf.vz;
 	}
@@ -1716,16 +1844,16 @@ void Alt_TestResetAll(void)
 	s_alt_cnt_prev = 0U;
 	s_alt_armed_prev = 0U;
 	g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
-	g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
-	g_alt_tof_sample_mode = ALT_TOF_SAMPLE_LEGACY;
-	s_alt_sample_mode = ALT_TOF_SAMPLE_LEGACY;
+	g_alt_cf_rate_mode = ALT_CF_RATE_SCALED;
+	g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST;
+	s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 	g_alt_tof_delay_ticks = 0U;
 	s_alt_delay_ticks = 0U;
 	g_alt_cf_spread_mode = 0U;
 	s_alt_spread_mode = 0U;
 	g_alt_cf_disarmed_test = 0U;
 	s_alt_disarmed_test_prev = 0U;
-	alt_cf.mode = ALT_CF_RATE_LEGACY;
+	alt_cf.mode = ALT_CF_RATE_SCALED;
 	s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 	s_alt_cf_inited = 0U;
 	Alt_CfReset(0.0f, 1U);

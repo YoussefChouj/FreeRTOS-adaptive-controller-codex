@@ -74,11 +74,13 @@ extern volatile uint8_t g_rc_fallback;
 /* Altitude complementary filter (Alt_UpdateFB, z-vz-cf) */
 #define ALT_VZ_MODE_FD      0
 #define ALT_VZ_MODE_CF      1
-#define ALT_VZ_MODE_DEFAULT ALT_VZ_MODE_CF  /* 2026-10-26 operator: CF on by default (was FD); VAR 58 = 0 disarmed reverts */
+#define ALT_VZ_MODE_KF      3   /* 2026-10-27: 3-state Kalman (h, vz, b_az); 2 is reserved and rejected */
+#define ALT_VZ_MODE_DEFAULT ALT_VZ_MODE_KF  /* 2026-10-27 operator: KF on by default after the 3-flight ladder (was CF since 10-26); VAR 58 = 0/1 disarmed reverts */
 
 /* Rate-scaling design constants, PROPOSED; seconds. Mode 0 preserves legacy gains. */
 #define ALT_CF_TS_DESIGN    0.05f
 #define ALT_CF_DTC_MAX      0.10f
+#define ALT_CF_K1_EFF_MAX   0.5f   /* PROPOSED 2026-10-27: cap on per-sample k1*dt_c/Ts in scaled mode */
 #define ALT_CF_RATE_LEGACY  0U
 #define ALT_CF_RATE_SCALED  1U
 #define ALT_TOF_SAMPLE_LEGACY 0U
@@ -103,6 +105,16 @@ typedef struct {
     float k3;
     float AccMax;
 } AltCfGains;
+
+typedef struct {
+    float SigAcc;   /* m/s^2, accel noise driving h and vz */
+    float SigBias;  /* m/s^2/sqrt(s), accel-bias random walk */
+    float SigTof;   /* m, ToF measurement noise */
+    float Huber;    /* innovation sigmas before the update is softened; 0 = off */
+    float Gate;     /* innovation sigmas before a sample is rejected; 0 = off (jump gate + resync instead) */
+    float ReacqS;   /* s, rejecting this long starts the soft re-acquire */
+    float StepMax;  /* m, largest h change from one update; 0 = off */
+} AltKfGains;
 
 typedef struct {
     float    h;

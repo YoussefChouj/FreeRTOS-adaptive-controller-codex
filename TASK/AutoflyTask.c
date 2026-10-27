@@ -535,7 +535,7 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(sysid_target,       VW_U8, 55,  0,       4      ),  /* 0 rate, 1 torque, 2 angle, 3 vel, 4 pos; sysid.h */
     VAR_WRITE_ROW(g_drift_nn_live,    VW_U8, 56,  0,       2      ),  /* NN 0 shadow, 1 pos, 2 pos+vel */
     VAR_WRITE_ROW(g_drift_nn_clamp_mps, VW_F32, 57, 0.0f,  0.30f  ),  /* m/s, NN residual clamp        */
-    VAR_WRITE_ROW(g_alt_vz_mode,      VW_U8, 58,  0,       1      ),  /* altitude vz mode: 0=FD, 1=CF  */
+    VAR_WRITE_ROW(g_alt_vz_mode,      VW_U8, 58,  0,       3      ),  /* vz mode 0=FD 1=CF 3=KF (2 rej) */
     VAR_WRITE_ROW(g_alt_cf_rate_mode, VW_U8, 59,  0,       1      ),  /* CF 0 legacy, 1 scaled; next arm */
     VAR_WRITE_ROW(g_alt_tof_sample_mode, VW_U8, 60, 0,      1      ),  /* 0 legacy, 1 newest; disarmed */
     VAR_WRITE_ROW(g_alt_tof_delay_ticks, VW_U8, 61, 0,      31     ),  /* ticks at 200 Hz; disarmed */
