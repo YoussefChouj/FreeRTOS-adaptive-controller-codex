@@ -11,6 +11,10 @@
   (optional xy-ref flights); attitude u_ad reset between flights; faster log slot for gyroxPID FB/Des + roll u_ad/u_nom;
   check highdtsPID.Des is in the log group of `lab_d_sysid_vel_z.fly`.
 - Nothing was written to the drone tonight.
+- 09:45 additions (lab UX + history): a Ctrl+C burst now lands once and never aborts, and labday survives it
+  (4e3aa4c9); keys print what they do. Flight history: `python -m ground_station.lab.flight_index` ->
+  `logs/flights/INDEX.md` (197 flights; 85 debriefs said "complete" for safety-monitor aborts, the index lists them as
+  aborted with the reason; labday refreshes it after each card) (348a8590). `tools/README.md` indexes every tool.
 
 ## Current task: 2026-10-27 SysID gate repair and roll restart (Codex, inline)
 
