@@ -16,7 +16,7 @@ def test_abba_presets_share_all_measured_pid_gains_and_only_switch_mode():
         assert not error
         assert "PROPOSED" in why
         assert {i: gains[i] for i in range(18, 24)} == {
-            18: 400, 19: 0.435, 20: 0, 21: 0.7, 22: 0.001, 23: 0.1,
+            18: 400, 19: 0.435, 20: 0, 21: 0.7, 22: 0.005, 23: 0.1,   # Ki 0.005 in all CF gains (86dea26e)
         }
         assert gains[58] == 1  # CF velocity feedback in both variants
         assert gains[59] == mode

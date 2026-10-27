@@ -13,7 +13,8 @@ CAMERA_SH = ROOT / "ground_station" / "lab" / "camera_truth.sh"
 TRACKER = ROOT / "ground_station" / "analysis" / "live_tracker.py"
 # .\X launchers at the repo root -> the module whose flags they take (cam passes extra args to the tracker)
 LAUNCHERS = {"labday": "ground_station/lab/labday.py", "fly": "ground_station/service/campaign_fly.py",
-             "lab": "ground_station/lab/__main__.py", "cam": str(TRACKER.relative_to(ROOT))}
+             "lab": "ground_station/lab/__main__.py", "cam": str(TRACKER.relative_to(ROOT)),
+             "cfab": "ground_station/service/campaign_fly.py"}  # cfab.cmd calls fly.cmd per ABBA leg (86dea26e)
 CMD = re.compile(r"python -m ([a-z_][\w.]*)|\.\\([a-z]+)\b|(camera_truth\.sh)")
 FLAG = re.compile(r"(?<![\w-])--[a-z][\w-]*")
 PATH = re.compile(r"(?:ground_station|docs)/[\w./-]+\.(?:py|sh|json|md|yaml|csv|cmd)\b")
