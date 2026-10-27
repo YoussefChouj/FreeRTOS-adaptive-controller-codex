@@ -82,3 +82,40 @@ This cadence sensitivity also fails to reproduce the reported amplitude. It esta
 ## Reproduce and evidence
 
 Run `python -m ground_station.lab.z_cf_sim --output docs/lab/data/z-cf-rootcause-A5`. It has no network or vehicle client. NumPy 2.4.4 / SciPy 1.17.1; seed 71027. Raw deterministic outputs: [sweep.csv](data/z-cf-rootcause-A5/sweep.csv), [factors.csv](data/z-cf-rootcause-A5/factors.csv), [cadence.csv](data/z-cf-rootcause-A5/cadence.csv), [assumptions.json](data/z-cf-rootcause-A5/assumptions.json). Raw scoped test output: [pytest.txt](data/z-cf-rootcause-A5/pytest.txt), from `python -m pytest ground_station/lab/tests/test_z_cf_sim.py -q`.
+
+## Estimator x delay table (A5 primary PID, PROPOSED 40 ms motor)
+
+All values are simulation outputs with PROPOSED plant/noise assumptions, not flight measurements. Upper GM `--` means no downward phase crossing in the scanned band; it is not an infinite-margin claim. Period 10.00 s is the lower frequency boundary of a 10 s record, not an identified sustained oscillator. OOB means trajectory left the model domain; nonlinear metrics are omitted. Settle `>25` means not reached within 25 s after the step.
+
+| Estimator | Delay ms | PM deg | Upper GM dB | Overshoot cm | Settle s | Hover RMS cm | Spectral period s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| fd_lpf | 0 | 34.22 | 7.40 | 2.96 | >25 | 0.27 | 0.71 |
+| fd_lpf | 25 | 23.59 | 4.29 | 3.06 | 24.18 | 0.37 | 1.00 |
+| fd_lpf | 50 | 12.95 | 2.08 | 3.63 | 24.95 | 0.50 | 0.83 |
+| fd_lpf | 75 | 2.31 | 0.34 | 4.69 | 24.92 | 0.98 | 0.83 |
+| fd_lpf | 100 | -8.33 | -1.11 | OOB | OOB | OOB | OOB |
+| current_cf | 0 | 71.32 | -- | 3.49 | 24.19 | 1.12 | 10.00 |
+| current_cf | 25 | 73.99 | -- | 3.44 | 24.09 | 1.12 | 10.00 |
+| current_cf | 50 | 76.44 | -- | 3.40 | >25 | 1.16 | 10.00 |
+| current_cf | 75 | 78.38 | -- | 3.60 | 24.04 | 1.14 | 10.00 |
+| current_cf | 100 | 79.52 | -- | 3.38 | 24.05 | 1.16 | 10.00 |
+| cf_a2 | 0 | 66.33 | -- | 3.46 | 24.09 | 1.14 | 10.00 |
+| cf_a2 | 25 | 68.71 | -- | 3.51 | 24.05 | 1.15 | 10.00 |
+| cf_a2 | 50 | 71.32 | -- | 3.43 | 24.09 | 1.14 | 10.00 |
+| cf_a2 | 75 | 73.99 | -- | 3.30 | 24.09 | 1.14 | 10.00 |
+| cf_a2 | 100 | 76.44 | -- | 3.34 | 24.05 | 1.15 | 10.00 |
+| cf_a2_a3 | 0 | 66.33 | -- | 3.46 | 24.09 | 1.14 | 10.00 |
+| cf_a2_a3 | 25 | 66.35 | -- | 3.55 | 24.06 | 1.19 | 10.00 |
+| cf_a2_a3 | 50 | 66.36 | -- | 3.68 | 24.09 | 1.26 | 10.00 |
+| cf_a2_a3 | 75 | 66.37 | -- | 3.73 | 24.13 | 1.31 | 10.00 |
+| cf_a2_a3 | 100 | 66.36 | -- | 3.76 | 24.30 | 1.41 | 10.00 |
+| cf_a2_a3_a4 | 0 | 66.35 | -- | 3.65 | 24.12 | 1.19 | 10.00 |
+| cf_a2_a3_a4 | 25 | 66.36 | -- | 3.67 | 24.23 | 1.24 | 10.00 |
+| cf_a2_a3_a4 | 50 | 66.37 | -- | 3.75 | 24.30 | 1.32 | 10.00 |
+| cf_a2_a3_a4 | 75 | 66.36 | -- | 3.90 | 24.36 | 1.40 | 10.00 |
+| cf_a2_a3_a4 | 100 | 66.35 | -- | 3.88 | 24.20 | 1.49 | 10.00 |
+| delayed_kf | 0 | 66.45 | -- | 2.78 | >25 | 0.37 | 3.33 |
+| delayed_kf | 25 | 66.50 | -- | 2.80 | >25 | 0.40 | 3.33 |
+| delayed_kf | 50 | 66.53 | -- | 2.78 | >25 | 0.42 | 2.00 |
+| delayed_kf | 75 | 66.56 | -- | 2.73 | >25 | 0.43 | 2.50 |
+| delayed_kf | 100 | 66.56 | -- | 2.90 | >25 | 0.48 | 2.50 |
