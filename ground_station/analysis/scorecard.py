@@ -25,6 +25,7 @@ import pandas as pd
 import yaml
 
 from ground_station.analysis import lab_flights
+from ground_station.autotune.excitation import STATE_RUNNING
 from ground_station.service import campaign_outputs as co
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -382,6 +383,17 @@ def config(out_dir: Path | None, session: Path | None, fly: Path | None) -> dict
     return c
 
 
+def excite_s(series: dict) -> float | None:
+    """Seconds the firmware sysid generator spent RUNNING, from the streamed sysid_state (id.sysid_state on the 0x03
+    ID frame); None when no sysid_state was logged, so a missing stream is never read as a refused excite."""
+    key = next((k for k in series if k == "sysid_state" or k.endswith(".sysid_state")), None)
+    if key is None:
+        return None
+    t, v = (np.asarray(a, float) for a in series[key])
+    run = t[v == STATE_RUNNING]
+    return _r(run[-1] - run[0]) if len(run) > 1 else 0.0
+
+
 def verdict(pass_text: str | None, card: dict) -> dict:
     """PROPOSED mapping of the day file's pass text to checks on this card. Clauses split on ';'; a clause the
     mapping does not know stays manual. The operator's verdict is always a manual check, so a flight is never a bare
@@ -394,6 +406,12 @@ def verdict(pass_text: str | None, card: dict) -> dict:
             pp = card.get("hold_pp_cm")
             res = "manual" if m is None or pp is None else "pass" if pp < float(m.group(1)) else "fail"
             checks.append((clause, res, f"hold p-p {pp} cm" + (f" vs {m.group(1)} cm" if m else "")))
+        elif "multisine" in low or "excite" in low:
+            # a sysid flight has no TRAJ phase: "bands complete" / "excite completes" is the firmware's RUNNING state,
+            # not the trajectory counters (10-28: every sysid card failed the "complete" clause on TRAJ 0 s)
+            ex = card.get("excite_s")
+            checks.append((clause, "manual" if ex is None else "pass" if ex > 0 and not card.get("aborts") else "fail",
+                           f"sysid RUNNING {ex} s, aborts {card.get('aborts') or 0}"))
         elif "figure-8" in low or "complete" in low:
             amp = card.get("traj_amp_ratio")
             ok = card.get("status") == "complete" and not card.get("aborts") and bool(card.get("traj_s")) \
@@ -458,6 +476,7 @@ def score_flight(folder, day_flight: dict | None = None, camera: str | None = No
     win = phase_masks(w)
     fm = co.flight_metrics(series) if series else {}
     card["hold_s"] = fm.get("hold_s")
+    card["excite_s"] = excite_s(series)
     tt = w.index.to_numpy(float)
     card["traj_s"] = _r(tt[win["traj"]][-1] - tt[win["traj"]][0]) if win["traj"] is not None \
         else (dbf.get("traj") or {}).get("s")

@@ -206,6 +206,18 @@ def test_verdict_mapping():
     assert sc.verdict("figure-8 completes", {**ok, "traj_s": None})["verdict"] == "fail"
 
 
+def test_sysid_complete_clause_reads_the_running_state_not_traj():
+    """10-28: every sysid card failed "both multisine bands complete" on TRAJ 0 s; a sysid flight has no TRAJ phase."""
+    card = {"status": "complete", "aborts": 0, "traj_s": None,
+            "excite_s": sc.excite_s({"id.sysid_state": ([0, 1, 2, 30], [1, 2, 2, 4])})}
+    assert card["excite_s"] == 1.0
+    assert sc.verdict("both multisine bands complete; fits with residual <= 0.35", card)["verdict"] == "pass+manual"
+    assert sc.verdict("excite completes", {**card, "excite_s": 0.0})["verdict"] == "fail"     # never ran
+    assert sc.verdict("excite completes", {**card, "excite_s": None})["verdict"] == "manual"  # not streamed
+    assert sc.verdict("excite completes", {**card, "aborts": 1})["verdict"] == "fail"
+    assert sc.excite_s({}) is None
+
+
 def test_day_report_trend_and_compare(lab, tmp_path):
     days = tmp_path / "days"
     c1 = _card(lab, day_flight={"id": "mem1", "fly": "lab_m_memory_u100", "pass": "figure-8 completes"})
