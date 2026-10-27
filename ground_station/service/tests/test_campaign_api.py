@@ -289,8 +289,17 @@ def test_apply_params_refuses_unknown_knob_and_cancelled_plan(api):
 
 def test_apply_params_true_through_real_agent(service, api):
     server, _ = api
+    from ground_station.platform.transactions import Outcome, RejectReason, Result
+
     gateway = Mock()
-    gateway.submit.return_value = 42
+
+    def _submit(command_id, index=0, value=0.0, flags=0):
+        # The firmware's ACK: the agent's command step waits for it (agent.py, 0fba18f6).
+        service.record_command_result(Result(transaction_id=42, command_id=command_id, index=index,
+                                             outcome=Outcome.APPLIED, reason=RejectReason.NONE, detail=""))
+        return 42
+
+    gateway.submit.side_effect = _submit
     service.gateway = gateway
     server.agent.set_control({**OPERATOR, "tier0_access": "full"})
     server.campaign.knobs = (Knob("k", 1, 0, 5.0, 0.0, 10.0, 1.0),)
