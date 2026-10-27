@@ -31,6 +31,11 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 
 ## 1. A lab day: `labday`
 
+**2026-10-28 deck (current):** flash first (`python -m ground_station.flashtool.rebuild_and_flash --yes`, COM6, then
+`python -m ground_station.livewatch verify`), restart 8081 `--lab`, then `.\labday 2026-10-28`. Order: rate step
+`rate32d169y104` (terminal y/n), smoke, MRAC shadow/live pairs (angle, vel, pos), PID and LQR baselines, sysid refly.
+`.\labday 2026-10-28 --list` shows it; why in `docs/lab/2026-10-28-verdicts.md`.
+
 For the 2026-10-27 deck, restart the labday process and resume with
 `.\labday 2026-10-27 --from rate-sysid-roll-wide`. This repeats roll, pitch, yaw,
 then the rate tuning gate and verification hover, even if those cards were already flown.
@@ -165,6 +170,22 @@ card has no new flags, body-acceleration fields or disarmed hand-test capability
 .\fly lab_z_cf_hover_legacy --record-only cf-ground-rate-old --rate 200
 .\fly lab_z_cf_hover_legacy --once --gains logs/lab/2026-10-27/2026-10-27-cf-legacy.json
 ```
+
+Height-filter ladder, three flights (2026-10-27, firmware d051deca). Same 0.4-1.2 m ladder each time; only
+VAR 58 changes: 0 = ToF difference (FD), 1 = tuned CF (wn 10), 3 = KF. 2 is not used (rejected). Each gains
+file is written disarmed after the terminal y/n. Then resume the day deck:
+
+```powershell
+.\fly lab_z_filter_ladder --once --gains logs/lab/2026-10-27/2026-10-27-zladder-fd.json
+.\fly lab_z_filter_ladder --once --gains logs/lab/2026-10-27/2026-10-27-zladder-cf.json
+.\fly lab_z_filter_ladder --once --gains logs/lab/2026-10-27/2026-10-27-zladder-kf.json
+.\labday 2026-10-27 --from smoke-hover
+```
+
+Result (flown 2026-10-27, flights 09-11): KF won (hold rms 4.2 cm vs FD 5.2 / CF 5.3, drop recovery 0.78 s vs CF
+1.77 s), plot `logs/flights/2026-10-27/11_z-filter-ladder/z_filter_flights.png`. **KF is the firmware default
+since firmware 59667f4b** (`ALT_VZ_MODE_DEFAULT`, `TASK/StabilizerTask.h`). To fly another mode, write VAR 58 = 0 or 1
+disarmed (the zladder fd/cf gains files above); a reflash or reboot brings back KF.
 
 CF correction-rate ABBA experiment (PROPOSED): after the reviewed firmware is flashed and
 verified, copy the two preset sources next to the saved day gains. The copies preserve the
