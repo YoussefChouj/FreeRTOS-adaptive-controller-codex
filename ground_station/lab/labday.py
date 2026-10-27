@@ -68,6 +68,8 @@ def _read(path):
             raise ValueError(f"{rel(path)}: flight id {fid} twice")
         if not (CAMPAIGNS / f"{name}.fly").is_file():
             raise ValueError(f"{rel(path)}: {fid}: no {rel(CAMPAIGNS / (name + '.fly'))}")
+        if "camera_mode" in f and (type(f["camera_mode"]) is not int or f["camera_mode"] not in range(4)):
+            raise ValueError(f"{rel(path)}: {fid}: camera_mode must be 0, 1, 2 or 3")
         seen.add(fid)
         f["id"], f["args"] = fid, [str(a) for a in f.get("args") or []]
     d["flights"], d["branches"] = flights, d.get("branches") or []
@@ -1215,13 +1217,19 @@ class Day:
                 return said
             self.say(f"  {problem}")
 
-    def camera_start(self, name):
+    def camera_start(self, name, flight=None):
         """True running, False flying without it, None on q."""
-        if not self.cam.get("mode"):
+        if not self.cam:
             return False
+        mode = (flight or {}).get("camera_mode", self.cam.get("mode"))
+        if mode is None:
+            return False
+        self.say(f"  camera mode {mode}: " + ("corrections OFF; tracker records only" if mode == 0 else
+                                             "shadow only" if mode == 1 else
+                                             "offset corrections" if mode == 2 else "in-EKF corrections"))
         while True:
-            rc = self.camera("fusion", name, str(self.cam["mode"]), *[str(a) for a in self.cam.get("args") or []])
-            events.log("labday_camera", name=name, rc=rc)
+            rc = self.camera("fusion", name, str(mode), *[str(a) for a in self.cam.get("args") or []])
+            events.log("labday_camera", name=name, mode=mode, rc=rc)
             if rc == 0:
                 return True
             a = self.ask("The camera did not start: Enter tries again, n flies without it, q quits: ").strip().lower()
@@ -1896,7 +1904,7 @@ class Day:
                 name = f"{f['id']}-{f['fly']}".lower().replace("_", "-")
                 if not self.service_up():
                     return "quit"
-                cam = self.camera_start(name)
+                cam = self.camera_start(name, f)
                 if cam is None:
                     return "quit"
                 try:

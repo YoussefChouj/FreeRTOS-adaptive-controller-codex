@@ -1,5 +1,20 @@
 # Handoff — stream `main`
 
+## Current task: 2026-10-27 SysID camera isolation (Codex, inline)
+
+- Goal: unblock rate-sysid-pitch-wide after the takeoff position_error; smallest host-only mitigation.
+- Facts: 74 scoped tests passed. All eight 10-27 SysID cards explicitly send camera mode 0 with tracker/video
+  recording; other cards inherit mode 3. Abort event: ingest lag 5 ms, dropped 0; camera innovation jumped
+  (-111.9,+50.4) cm and sideways feedback rose to ~72 cm. Camera reacquisition/height projection remains a hypothesis.
+- Constraints/gates: no controller, estimator, excitation, rate or safety-limit changes. Mode 0 gives up camera
+  drift correction. Offline tests validate configuration/launch only; flight performance remains unverified.
+- Next 3 actions: (1) quit/restart labday and resume rate-sysid-pitch-wide; (2) confirm mode-0 takeoff reaches hover,
+  stop on another abort; (3) after lab inspect lift-off fixes/video/height timing per open-items.
+- Do-nots: no flash for this fix, no relaxed abort limits, no outside workers, preserve the unrelated dirty work.
+- Broader checks: command-doc suite already fails on cfab launcher mapping; deferred in open-items.
+- Resume: `.\labday 2026-10-27 --from rate-sysid-pitch-wide` (new process; 8081 may stay up).
+
+
 - **Updated:** 2026-10-22 07:05 +03:00 (desktop CEO, overnight run 10-21 -> 10-22)
 - **Branch / Base:** local `main` is the work tip (`38943d0d`), mirrored to `origin/nightly-1022` at ship points (`git push origin main:nightly-1022`). `origin/main` moves only through `tools/land.sh`.
 

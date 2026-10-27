@@ -82,18 +82,21 @@ flights:
 
   # ======== BLOCK 1: INNER RATE LOOP SYSID (sysid_target=0, 0.2-40 Hz split low/high @ 200 Hz) ========
   - id: rate-sysid-roll-wide
+    camera_mode: 0  # record tracking; disable camera corrections for identification
     fly: lab_d_sysid_rate_roll
     why: "Block 1 roll rate sysid: low band 0.2-5 Hz (45 deg/s, 30 s, >=4 Welch averages at 0.2 Hz) + high band 2-40 Hz (60 deg/s, 30 s) at 200 Hz"
     pass: "both multisine bands complete; `python -m ground_station.autotune.cli <session> --loop rate --axis roll --correct-zoh` fits with residual <= 0.35 and coverage >= 50% (PROPOSED)"
     notes: "10-24 roll rate 214336 (0.5-15 Hz): k=9.456, tau=90.0 ms, delay=13.2 ms, PM 21.4 -> 34.4 deg with rate35 (Kp=3.5, Kd=13)"
 
   - id: rate-sysid-pitch-wide
+    camera_mode: 0  # record tracking; disable camera corrections for identification
     fly: lab_d_sysid_rate_pitch
     why: "Block 1 pitch rate sysid: low band 0.2-5 Hz (45 deg/s, 30 s) + high band 2-40 Hz (60 deg/s, 30 s) at 200 Hz"
     pass: "both multisine bands complete; `python -m ground_station.autotune.cli <session> --loop rate --axis pitch --correct-zoh` fits with residual <= 0.35 (PROPOSED)"
     notes: "10-24 pitch rate 214336 (0.5-15 Hz): k=6.492, tau=58.0 ms, delay=18.1 ms, PM 28.0 -> 43.2 deg with rate35"
 
   - id: rate-sysid-yaw-wide
+    camera_mode: 0  # record tracking; disable camera corrections for identification
     fly: lab_d_sysid_rate_yaw
     why: "Block 1 yaw rate sysid: low band 0.2-5 Hz (45 deg/s, 30 s) + high band 2-40 Hz (60 deg/s, 30 s) at 200 Hz"
     pass: "both multisine bands complete; `python -m ground_station.autotune.cli <session> --loop rate --axis yaw --correct-zoh` fits with residual <= 0.35 (PROPOSED)"
@@ -109,6 +112,7 @@ flights:
 
   # ======== BLOCK 2: ATTITUDE ANGLE LOOP SYSID (sysid_target=2, 0.2-6 Hz, 6 deg) ========
   - id: angle-sysid-roll-pitch
+    camera_mode: 0  # record tracking; disable camera corrections for identification
     fly: lab_d_sysid_angle
     gate: "Block 1 rate-gain-verify-hover passed; inner rate loop gains locked"
     why: "Block 2 attitude angle sysid (`sysid_target=2`): 0.2-6 Hz multisine (6 deg, 30 s each) on roll and pitch with locked inner rate gains"
@@ -124,6 +128,7 @@ flights:
 
   # ======== BLOCK 3: VELOCITY LOOP SYSID (sysid_target=3, 0.15-3 Hz, x/y 25 cm/s, z 0.25 m/s) ========
   - id: vel-sysid-xy
+    camera_mode: 0  # record tracking; disable camera corrections for identification
     fly: lab_d_sysid_vel_xy
     gate: "Block 2 angle-gain-verify-hover passed; inner rate + angle loops locked"
     why: "Block 3 horizontal velocity sysid (`sysid_target=3`): 0.15-3 Hz multisine (25 cm/s, 30 s each) on vx (pitch) and vy (roll)"
@@ -131,6 +136,7 @@ flights:
     tune: {kind: pid, loop: vel, axes: [x, y], from: [vel-sysid-xy]}
 
   - id: vel-sysid-z
+    camera_mode: 0  # record tracking; disable camera corrections for identification
     fly: lab_d_sysid_vel_z
     gate: "Block 2 angle-gain-verify-hover passed"
     why: "Block 3 vertical velocity sysid (`sysid_target=3`, `axis=z`): two 30 s passes of 0.15-3 Hz multisine at 0.25 m/s on `highdtsPID.Des`"
@@ -146,6 +152,7 @@ flights:
 
   # ======== BLOCK 4: POSITION LOOP SYSID (sysid_target=4, 0.1-1.5 Hz, x/y 15 cm, z 0.15 m) ========
   - id: pos-sysid-xy
+    camera_mode: 0  # record tracking; disable camera corrections for identification
     fly: lab_d_sysid_pos_xy
     gate: "Block 3 vel-gain-verify-hover passed; inner rate + angle + velocity loops locked"
     why: "Block 4 horizontal position sysid (`sysid_target=4`): 0.1-1.5 Hz multisine (15 cm, 30 s each) on x (pitch) and y (roll) across the 0.25-0.63 Hz wobble band"
@@ -153,6 +160,7 @@ flights:
     tune: {kind: pid, loop: pos, axes: [x, y], from: [pos-sysid-xy]}
 
   - id: pos-sysid-z
+    camera_mode: 0  # record tracking; disable camera corrections for identification
     fly: lab_d_sysid_pos_z
     gate: "Block 3 vel-gain-verify-hover passed"
     why: "Block 4 vertical position sysid (`sysid_target=4`, `axis=z`): two 30 s passes of 0.1-1.5 Hz multisine at 0.15 m on `highPID.Des`"

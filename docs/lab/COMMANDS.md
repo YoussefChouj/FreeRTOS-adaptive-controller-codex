@@ -31,6 +31,15 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 
 ## 1. A lab day: `labday`
 
+For the 2026-10-27 deck, restart the labday process and resume with
+`.\labday 2026-10-27 --from rate-sysid-pitch-wide`. Each SysID card specifies
+`camera_mode: 0`: the camera/tracker still records, and sends mode 0 (corrections off).
+Every other card inherits the day's mode 3, including verification hovers. A card may
+override `camera_mode` with integer 0, 1 (shadow), 2 (offset corrections), or 3 (in-EKF).
+Mode 2 still corrects position; use mode 0 to isolate identification from camera feedback.
+`--no-camera` skips the tracker; it is not a substitute for explicitly sending mode 0.
+This change needs a new labday process, with no firmware flash or service restart.
+
 Standalone altitude diagnosis (PROPOSED 0.8 m / 30 s hover, nominal PID, no gain sweep):
 
 ```powershell

@@ -325,6 +325,34 @@ def test_dry_run_failure_flies_nothing(tmp_path, monkeypatch):
 CAM = {"floor": "fl", "mode": 3, "args": ["--yaw-deg", 94]}
 
 
+@pytest.mark.parametrize("mode", [0, 1, 2])
+def test_camera_override_records_and_restores_day_mode(tmp_path, monkeypatch, mode):
+    fake = _Fake([])
+    p = _player(
+        tmp_path, monkeypatch, fake, [{"id": "sysid", "fly": "lab_d_sysid_rate_pitch", "camera_mode": mode},
+                                    {"id": "verify", "fly": "lab_a_hover_verify"}], camera=CAM)
+    assert p.camera_start("sysid", p.d["flights"][0]) is True
+    assert p.camera_start("verify", p.d["flights"][1]) is True
+    assert _sh(fake) == [["fusion", "sysid", str(mode), "--yaw-deg", "94"],
+                         ["fusion", "verify", "3", "--yaw-deg", "94"]]
+    assert p.cam["mode"] == 3
+
+
+@pytest.mark.parametrize("mode", [-1, 4, "0", False])
+def test_camera_override_rejects_invalid_mode(tmp_path, mode):
+    with pytest.raises(ValueError, match="camera_mode"):
+        _day(tmp_path, [{"id": "sysid", "fly": "lab_d_sysid_rate_pitch", "camera_mode": mode}])
+
+
+def test_oct27_sysid_camera_off_other_flights_keep_mode3():
+    d = labday.load_day(labday.day_path("2026-10-27"))
+    assert d["camera"]["mode"] == 3
+    sysid = [f for f in d["flights"] if "-sysid-" in f["id"]]
+    assert len(sysid) == 8
+    assert all(f["camera_mode"] == 0 for f in sysid)
+    assert all(f.get("camera_mode", 3) == 3 for f in d["flights"] if f not in sysid)
+
+
 def test_camera_around_each_flight_after_the_launch_floor_scan(tmp_path, monkeypatch):
     fake = _Fake(["q"])
     p = _player(tmp_path, monkeypatch, fake, [{"id": "A", "fly": "lab_c_robust"}], camera=CAM)
@@ -375,7 +403,7 @@ def test_flight_exception_stops_camera_exactly_once(tmp_path, monkeypatch, error
     p = _player(tmp_path, monkeypatch, fake, [{"id": "smoke-hover", "fly": "lab_c_robust"}])
     stopped = []
     monkeypatch.setattr(p, "service_up", lambda: True)
-    monkeypatch.setattr(p, "camera_start", lambda name: True)
+    monkeypatch.setattr(p, "camera_start", lambda name, flight=None: True)
     monkeypatch.setattr(p, "camera_stop", stopped.append)
 
     def fly(*args):
