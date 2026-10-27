@@ -101,6 +101,17 @@ Produces measured spectra, relative lags, cadence, bias/throttle correlation and
 The short 25 Hz records cannot identify true sensor latency or hidden correction steps;
 search-boundary spectral peaks are unresolved slow variation, not precise periods.
 
+The analysis JSON also reports ToF-to-height and d(ToF)/dt-to-velocity lag
+(positive means CF follows ToF; PROPOSED 0.1-2 Hz zero-phase band, +/-0.5 s
+search), dominant period, optional coherent bias/throttle correlation, and observed
+correction residuals. Raw of_alt_cm/100 is preferred, with of2_h fallback. At
+25 Hz, inter-frame differences cannot isolate 5 ms corrections; contiguous 200 Hz
+snapshots are required. Missing replay diagnostics yield unavailable metrics;
+large gaps are rejected. Effective alt_cf.delay_ticks or alt_cf.spread_mode nonzero
+disables baseline replay certification. Pending requests are only a fallback;
+unlogged effective modes remain explicit unverified assumptions. All-tick residuals
+include smoothing between arrivals; arrival-tick residuals are reported separately.
+
 CF correction-rate ABBA experiment (PROPOSED): after the reviewed firmware is flashed and
 verified, copy the two preset sources next to the saved day gains. The copies preserve the
 saved attitude gains and explicitly set the measured Z position PID to 0.7/0.001/0.1 and
