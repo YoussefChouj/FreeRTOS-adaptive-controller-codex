@@ -112,6 +112,17 @@ disables baseline replay certification. Pending requests are only a fallback;
 unlogged effective modes remain explicit unverified assumptions. All-tick residuals
 include smoothing between arrivals; arrival-tick residuals are reported separately.
 
+Offline vertical closed-loop simulation (all physical parameters are PROPOSED):
+
+```powershell
+python -m ground_station.lab.z_cf_sim --output docs/lab/data/z-cf-rootcause-A5
+```
+
+Writes estimator/delay/motor/PID sweeps, cadence sensitivity, assumptions and test evidence.
+The model uses the actual 100 Hz altitude / 200 Hz climb PID schedule. Its averaged
+sample/hold margins and assumed thrust slope are simulation evidence only; hover
+throttle alone cannot identify mass or thrust response.
+
 CF correction-rate ABBA experiment (PROPOSED): after the reviewed firmware is flashed and
 verified, copy the two preset sources next to the saved day gains. The copies preserve the
 saved attitude gains and explicitly set the measured Z position PID to 0.7/0.001/0.1 and

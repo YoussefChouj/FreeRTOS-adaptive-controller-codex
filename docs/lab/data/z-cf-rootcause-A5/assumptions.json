@@ -1,0 +1,17 @@
+{
+  "status": "PROPOSED",
+  "parameters": {
+    "thrust_slope": 0.02,
+    "hover_ccr": 3050.0,
+    "accel_noise": 0.15,
+    "range_noise": 0.005,
+    "accel_bias": 0.08,
+    "thrust_bias": 0.08,
+    "quantize_cm": true
+  },
+  "seed": 71027,
+  "duration_s": 40,
+  "sample_hz": 20,
+  "tick_hz": 200,
+  "notes": "Mass and thrust curve unidentifiable from hover CCR alone."
+}
