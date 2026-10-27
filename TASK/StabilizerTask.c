@@ -1253,7 +1253,7 @@ static uint8_t  s_alt_cf_inited    = 0U;
 static uint8_t  s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 static uint8_t  s_alt_armed_prev   = 0U;
 static uint16_t s_alt_cf_steps     = 0U;
-static uint8_t s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;
+static uint8_t s_alt_sample_mode = ALT_TOF_SAMPLE_LEGACY;
 static uint8_t s_alt_delay_ticks = 0U;
 static uint8_t s_alt_spread_mode = 0U;
 /* At most one packet starts per tick; each lives at most 20 ticks (100 ms).
@@ -1297,7 +1297,7 @@ static const AltCfGains s_alt_cf_gains[] = {
 
 volatile uint8_t g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
 volatile uint8_t g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
-volatile uint8_t g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST;
+volatile uint8_t g_alt_tof_sample_mode = ALT_TOF_SAMPLE_LEGACY;
 volatile uint8_t g_alt_tof_delay_ticks = 0U;
 volatile uint8_t g_alt_cf_spread_mode = 0U;
 volatile uint8_t g_alt_cf_disarmed_test = 0U;
@@ -1717,8 +1717,8 @@ void Alt_TestResetAll(void)
 	s_alt_armed_prev = 0U;
 	g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
 	g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
-	g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST;
-	s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;
+	g_alt_tof_sample_mode = ALT_TOF_SAMPLE_LEGACY;
+	s_alt_sample_mode = ALT_TOF_SAMPLE_LEGACY;
 	g_alt_tof_delay_ticks = 0U;
 	s_alt_delay_ticks = 0U;
 	g_alt_cf_spread_mode = 0U;

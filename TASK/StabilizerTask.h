@@ -121,7 +121,7 @@ typedef struct {
 
 extern volatile uint8_t g_alt_vz_mode;
 extern volatile uint8_t g_alt_cf_rate_mode; /* VAR 59; pending until next arm */
-extern volatile uint8_t g_alt_tof_sample_mode; /* 0 old tick median, 1 newest (default); disarmed latch */
+extern volatile uint8_t g_alt_tof_sample_mode; /* 0 old tick median (default, = pre-fix fw), 1 newest; disarmed latch */
 extern volatile uint8_t g_alt_tof_delay_ticks; /* 0 default; 0..31 ticks, disarmed latch */
 extern volatile uint8_t g_alt_cf_disarmed_test; /* bool, default off; disarmed telemetry only, cleared on arm */
 extern volatile uint8_t g_alt_cf_spread_mode; /* 0 default, 1 spread; disarmed latch */

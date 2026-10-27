@@ -1446,6 +1446,8 @@ static void test_a1_stale_arrival(void)
     float expected;
     for (shape = 0; shape < 2; shape++) {
         reset_env(ALT_VZ_MODE_CF, 100U);
+        g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST; /* A2 is opt-in; default is legacy */
+        s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;  /* reset_env latched legacy while disarmed */
         events = 0;
         stale = 0;
         for (tick = 1; tick <= 400; tick++) {
@@ -1479,6 +1481,8 @@ static void test_a2_outlier_and_latch(void)
     int tick;
     uint32_t corrections;
     reset_env(ALT_VZ_MODE_CF, 100U);
+    g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST; /* A2 is opt-in; default is legacy */
+    s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;  /* reset_env latched legacy while disarmed */
     corrections = alt_cf.n_corr;
     ano_of.of_alt_cm = 120U;
     ano_of.alt_update_cnt++;
@@ -1605,6 +1609,8 @@ static void test_a4_packets_and_clamp(void)
     int tick, i, active, peak = 0;
     float ref_h = 1.0f, ref_v = 0.0f, ref_b = 0.0f;
     reset_env(ALT_VZ_MODE_CF, 100U);
+    g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST; /* A2 is opt-in; default is legacy */
+    s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;  /* reset_env latched legacy while disarmed */
     for (i = 0; i < 31; i++) Alt_CfHistoryPush();
     for (tick = 0; tick < 35; tick++) {
         if (tick > 0) {
