@@ -399,3 +399,32 @@ def test_abort_during_the_climb_still_sends_land():
     assert out.aborted and out.decision.reason == "operator land"
     assert out.steps[0]["kind"] == "takeoff" and not out.steps[0]["ok"]
     assert out.landed and int(drone.status()["prim_state"]) == PRIM_IDLE
+
+
+def _lose_takeoff_reply(deps, applied: bool):
+    inner = deps.client.takeoff
+
+    def takeoff():
+        if applied:
+            inner()
+        deps.client.last_error = "cmd 0x1A idx 0: no result in 1.0 s"
+        return False
+
+    deps.client.takeoff = takeoff
+
+
+def test_takeoff_reply_lost_but_applied_flies_on():
+    """10-27 f16: TAKEOFF applied (climbed to 0.54 m), reply lost at 1.0 s, the host called it refused and landed.
+    No result is unknown, not refused: prim_state decides."""
+    drone, clock, deps = _rig()
+    _lose_takeoff_reply(deps, applied=True)
+    out = fly_scenario(load_scenario("hover", {"z": 0.5, "hold_s": 2}), deps)
+    assert not out.aborted, out.decision
+
+
+def test_takeoff_reply_lost_and_not_applied_still_refuses():
+    drone, clock, deps = _rig()
+    _lose_takeoff_reply(deps, applied=False)
+    out = fly_scenario(load_scenario("hover", {"z": 0.5, "hold_s": 2}), deps)
+    assert out.aborted and "takeoff refused at takeoff: cmd 0x1A idx 0: no result" in out.decision.reason
+    assert int(drone.status()["prim_state"]) == PRIM_IDLE
