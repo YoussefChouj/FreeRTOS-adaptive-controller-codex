@@ -1,0 +1,16 @@
+# PROPOSED z-filter comparison ladder (operator 2026-10-27 22:00): same rungs as z-accel-ladder, flown three times
+# with VAR 58 = 0 (FD, ToF difference), 1 (CF wn 10) and 3 (KF). idle 10 s, hold 5 s, 7 s dwell per rung
+# (z-accel-ladder ran 118.8 s airborne and the 120 s cap cut its last return; this one is ~29 s shorter).
+# Gains come from the --gains file of each flight; no excitation.
+campaign z-filter-ladder
+rate 200
+log z_cf
+slow 25 z_pid_gains takeoff_gate camera_fusion
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_drift_nn_live=0
+takeoff 0.4 mrac_injection=0 idle_s=10
+hold 5
+goto x=0 y=0 z=0.6 dwell_s=7 v_cruise_mps=0.2
+goto x=0 y=0 z=0.8 dwell_s=7 v_cruise_mps=0.2
+goto x=0 y=0 z=1.0 dwell_s=7 v_cruise_mps=0.2
+goto x=0 y=0 z=1.2 dwell_s=7 v_cruise_mps=0.2
+land

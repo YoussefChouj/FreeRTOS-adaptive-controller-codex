@@ -2583,9 +2583,9 @@ volatile float g_traj_ff_shift_s = 0.0f;
  * (0 = off). Read in Wfb_Step; the descent itself is unchanged. */
 volatile float g_land_xy_gate_cm = 0.0f;
 /* Smith-predictor delay of the LQR/MPC xy loops, 10 ms ticks (VAR_WRITE id 47, latched on the ground with the kind).
- * 2026-10-15: the gains assume 33; a shorter real delay (camera stale, flow only) limit-cycled LQR/MPC at ~2 Hz in
- * ground_station/analysis/xy_delay_sim.py. Default 12 is PROPOSED from that sim, not measured. */
-volatile uint8_t g_xyc_delay_ticks = 12U;
+ * Default 33 = XYC_D, the delay the gains were designed for and the camera lag measured on 10-21 (330 ms). The only
+ * LQR flight that held (10-15, rms 4/3 cm) ran 33; every flight on 12/18/21 rang or was aborted (docs/lab/2026-10-28-verdicts.md). */
+volatile uint8_t g_xyc_delay_ticks = 33U;
 static uint8_t s_xyc_kind;
 static XyCtrlState s_xyc[2];
 #define TRAJ_FF_VZ_MAX_MPS     1.0f     /* = Z_posPID UMax, the climb-rate the position loop may ask for */

@@ -1,0 +1,16 @@
+# PROPOSED bench ladder for the z KF noise model (operator 2026-10-27): idle 30 s on the ground, then
+# goto is out-and-back from 0.4 m: 0.6, 0.8, 1.0, 1.2 m, 10 s dwell each; each return is the down step (120 s airborne cap). Same log plan as lab_z_cf_hover (200 Hz z_cf).
+# Props-off ground still is a separate capture: .\fly lab_z_accel_ladder --record-only accel-ground-still --rate 200
+# Gains and filters stay as the wn16 day gains; no excitation.
+campaign z-accel-ladder
+rate 200
+log z_cf
+slow 25 z_pid_gains takeoff_gate camera_fusion
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_drift_nn_live=0
+takeoff 0.4 mrac_injection=0 idle_s=30
+hold 10
+goto x=0 y=0 z=0.6 dwell_s=10 v_cruise_mps=0.2
+goto x=0 y=0 z=0.8 dwell_s=10 v_cruise_mps=0.2
+goto x=0 y=0 z=1.0 dwell_s=10 v_cruise_mps=0.2
+goto x=0 y=0 z=1.2 dwell_s=10 v_cruise_mps=0.2
+land

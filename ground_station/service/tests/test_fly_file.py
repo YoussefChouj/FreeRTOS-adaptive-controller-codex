@@ -110,8 +110,9 @@ def test_compiled_sample_flies_on_the_fake_drone():
     assert drone.vars["traj_p.move_s"] == 12.0 and drone.vars["traj_p.f8_a_cm"] == 30.0
 
 
-# Smith-predictor delay (VAR 47) measured from the 10-21 exp flights (u_prev -> velocity fit, median).
-MEASURED_XY_DELAY_TICKS = 21
+# Smith-predictor delay (VAR 47): the only LQR flight that held (10-15 #12, hover rms 4/3 cm) ran the compiled
+# XYC_D = 33 ticks = 330 ms, the camera lag measured on 10-21. Every flight at 12/18/21 rang or was aborted (10-28 verdicts).
+MEASURED_XY_DELAY_TICKS = 33
 
 # 10-27 figure-8 fix ladder + model flights set the n26 VARs (47, 70..74) on the ground, exactly these values.
 N26_SLOW = {"g_traj_slow_on": 1, "g_traj_slow_elo_cm": 20, "g_traj_slow_ehi_cm": 45, "g_traj_arrive_r_cm": 15}
@@ -121,7 +122,7 @@ N26_FIX_GROUND = {
     "lab_e_fix_predictor_lqr_half": {"g_xyc_delay_ticks": 18, "g_xyc_pred_lead": 1, "g_traj_slow_on": 0},
     "lab_e_fix_slow_clock_lqr_half": {"g_xyc_delay_ticks": 12, **N26_SLOW},
 }
-N26_MODEL_GROUND = {"g_xyc_delay_ticks": 18, "g_xyc_pred_lead": 1, **N26_SLOW}
+N26_MODEL_GROUND = {"g_xyc_delay_ticks": 33, "g_xyc_pred_lead": 0, **N26_SLOW}
 
 # n28 W4 optional adaptation-layer shadow/live hover pairs (40 s each): exact ground `set` dicts (all PROPOSED).
 N28_ADAPT_GROUND = {
@@ -167,7 +168,7 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
     if n26 is not None:
         assert {k: ground.get(k) for k in n26} == n26
         want |= set(n26)
-    if "g_xyc_delay_ticks" in ground and n26 is None:  # 10-21 logs: loop delay ~21 ticks; _d12 / diag_lqr / model test VAR47=12..18
+    if "g_xyc_delay_ticks" in ground and n26 is None:  # _d12 / diag_lqr test VAR47=12
         want_delay = 12 if (path.stem.endswith("_d12") or path.stem.startswith("lab_e_diag_lqr_")) else MEASURED_XY_DELAY_TICKS
         assert ground["g_xyc_delay_ticks"] == want_delay
     assert set(ground) == want

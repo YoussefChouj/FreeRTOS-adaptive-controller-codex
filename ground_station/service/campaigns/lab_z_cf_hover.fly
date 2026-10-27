@@ -1,12 +1,12 @@
 # PROPOSED diagnostic hover: 0.8 m, 30 s. No excitation and no gain/filter changes.
 # Direct slot 0 requests PROPOSED 200 Hz; slots 1-3 are stopped and actual rate gates takeoff.
-# CF capture promotes slow groups into the same frame; camera omitted for wire budget.
+# CF capture promotes slow groups into the same frame; camera_fusion rides the 25 Hz slot (z truth).
 # Typed budget failure stops without trimming; use *_legacy card only on old firmware.
 # Both Z loops stay nominal PID; use the saved day gains to reproduce the current candidate.
 campaign z-cf-hover
 rate 200
 log z_cf
-slow 25 z_pid_gains takeoff_gate
+slow 25 z_pid_gains takeoff_gate camera_fusion
 set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_drift_nn_live=0
 takeoff 0.8 mrac_injection=0
 hold 30
