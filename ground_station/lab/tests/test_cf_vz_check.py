@@ -193,6 +193,23 @@ def test_large_gap_is_not_interpolated():
         check.analyze(t[keep], {key: value[keep] for key, value in values.items()})
 
 
+def test_frames_sharing_one_receive_stamp_stay_separate(tmp_path):
+    t, values = _firmware_capture(0)
+    # 10-27 capture: one host read stamped 2-3 frames with the same received_ns,
+    # and each frame also carried an unprefixed xTickCount alias.
+    stamps = (1e9 + t * 1e9).astype(np.int64)[(np.arange(len(t)) // 3) * 3]
+    with (tmp_path / "telemetry.csv").open("w", newline="", encoding="utf-8") as out:
+        writer = csv.writer(out)
+        writer.writerow(("timestamp_ns", "slot", "key", "value"))
+        for i, stamp in enumerate(stamps):
+            for key, column in values.items():
+                writer.writerow((stamp, 0, "slot0." + key, column[i]))
+            writer.writerow((stamp, 0, "xTickCount", values["xTickCount"][i]))
+    captured_t, _, slot = check.read_fast_slot(tmp_path)
+    assert slot == 0 and len(captured_t) == len(t)
+    assert np.allclose(np.diff(captured_t), np.diff(t))
+
+
 def test_missing_core_fields_still_fail(tmp_path):
     t, values = _firmware_capture(0)
     del values["alt_cf.vz"]

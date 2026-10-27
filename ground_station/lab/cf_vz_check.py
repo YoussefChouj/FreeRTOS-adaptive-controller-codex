@@ -44,7 +44,8 @@ def _increments(values: np.ndarray, bits: int) -> np.ndarray:
 
 def read_fast_slot(session: Path) -> tuple[np.ndarray, dict[str, np.ndarray], int]:
     """Keep coherent frames together; never align values by CSV row index."""
-    frames: dict[tuple[int, int], dict[str, float]] = {}
+    frames: list[tuple[int, int, dict[str, float]]] = []
+    open_frame: dict[int, tuple[int, set[str], dict[str, float]]] = {}
     with (session / "telemetry.csv").open(newline="", encoding="utf-8-sig") as src:
         rows = csv.reader(src)
         next(rows, None)
@@ -53,11 +54,19 @@ def read_fast_slot(session: Path) -> tuple[np.ndarray, dict[str, np.ndarray], in
                 stamp, slot = int(row[0]), int(row[1])
                 key = re.sub(r"^slot\d+\.", "", row[2])
                 if key in FAST_FIELDS + THROTTLE_FIELDS + REPLAY_MODE_FIELDS:
-                    frames.setdefault((slot, stamp), {})[key] = float(row[3])
+                    value = float(row[3])
+                    frame = open_frame.get(slot)
+                    # One host read can stamp 2-3 frames with the same received_ns
+                    # (measured 10-27); a repeated CSV key starts the next frame.
+                    if frame is None or frame[0] != stamp or row[2] in frame[1]:
+                        frame = open_frame[slot] = (stamp, set(), {})
+                        frames.append((slot, stamp, frame[2]))
+                    frame[1].add(row[2])
+                    frame[2][key] = value
             except (ValueError, IndexError):
                 continue
     candidates = {}
-    for (slot, stamp), values in frames.items():
+    for slot, stamp, values in frames:
         if (all(key in values and np.isfinite(values[key]) for key in CORE_FIELDS)
                 and any(np.isfinite(values.get(key, np.nan))
                         for key in ("ano_of.of2_h", "ano_of.of_alt_cm"))):
