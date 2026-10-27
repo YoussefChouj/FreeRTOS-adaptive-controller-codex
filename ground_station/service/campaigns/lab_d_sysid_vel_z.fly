@@ -1,5 +1,5 @@
-# D-vel-z: vertical velocity-loop multisine (sysid_target=3, axis=z -> highdtsPID.Des, 0.15-3 Hz, 0.25 m/s, two 30 s passes, 200 Hz stream).
-# Identifies vertical velocity loop plant from highdtsPID output to vertical velocity.
+# D-vel-z: vertical velocity-loop multisine (sysid_target=3, axis=z -> Ctrler.Z_ratePID.Des, 0.15-3 Hz, 0.25 m/s, two 30 s passes, 200 Hz stream).
+# Identifies vertical velocity loop plant from Ctrler.Z_ratePID.Des (vertical velocity setpoint) to Z_ratePID.FB.
 # Ground analysis: python -m ground_station.autotune.cli <session> --loop vel --axis z. All values PROPOSED.
 campaign lab-d-sysid-vel-z
 rate 200

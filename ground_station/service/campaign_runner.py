@@ -533,6 +533,13 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 decision = AbortDecision(level=1, reason=f"excite: not holding at the hover point (x {xy[0]:.2f}, "
                                                          f"y {xy[1]:.2f} m, tol {EXCITE_ORIGIN_TOL_M} m)")
                 ok = False
+            # Without sysid_state the readback below cannot see a refused start (10-28 vel-z: log plan had no sysid
+            # group, nothing ran, the step said ok), so an unconfirmable start is a refusal, not a pass.
+            if ok and "sysid_state" not in deps.status():
+                decision = AbortDecision(level=1, reason="excite: sysid_state is not in the stream, the start cannot be "
+                                                         "checked (log the `sysid` group; flash firmware with the "
+                                                         "sysid_state mirror, `python -m ground_station.livewatch verify`)")
+                ok = False
             if ok:
                 a = st.args
                 excite_sent = True

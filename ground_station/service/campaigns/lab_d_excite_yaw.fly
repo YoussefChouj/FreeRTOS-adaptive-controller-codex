@@ -7,7 +7,7 @@ campaign lab-d-excite-yaw
 # 13x the 15 Hz top line. Lab mode keeps it (campaign_live.keeps_full_rate); no live probe yet. thrust_model adds
 # u_gyrox/u_gyroy/u_gyroz (rate PID output = Uc for the frequency response); the core set has gyro PID .FB/.Des + motors.
 rate 200
-log velocity_loops camera_fusion thrust_model
+log velocity_loops camera_fusion thrust_model sysid
 set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
 takeoff 0.5 mrac_injection=0
 hold 8

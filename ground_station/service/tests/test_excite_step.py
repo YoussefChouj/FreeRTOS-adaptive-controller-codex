@@ -121,3 +121,13 @@ def test_autotune_campaigns_load_and_match_the_cli_excite(name):
     preset = ex.VERIFY_EXCITE if name == "autotune_verify" else ex.ID_EXCITE
     for st in (s for s in scn.steps if s.kind == "excite"):
         assert {k: st.args[k] for k in preset} == dict(preset)
+
+
+def test_excite_aborts_when_sysid_state_is_not_streamed():
+    # 10-28 vel-z: no sysid group in the log plan, so the readback could not see the refused start
+    drone, _, deps = _rig()
+    inner = deps.status
+    deps.status = lambda: {k: v for k, v in inner().items() if k != "sysid_state"}
+    out = fly_scenario(parse_scenario(_scn([{"hold": {"s": 5}}, {"excite": EXCITE}])), deps)
+    assert out.aborted and out.landed and "sysid_state is not in the stream" in out.decision.reason
+    assert drone.sysid_starts == 0

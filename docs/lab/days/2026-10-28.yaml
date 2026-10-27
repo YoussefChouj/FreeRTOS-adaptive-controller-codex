@@ -3,7 +3,7 @@
 # Why this order (docs/lab/2026-10-28-verdicts.md): every 10-27/28 flight wobbles at 2.3-2.9 Hz = the rate-loop crossover
 # with PM 40-45 deg, and live MRAC doubles it. So: rate step first (one variable: roll/pitch only, yaw kept), hover check,
 # then the thesis MRAC shadow/live pairs, then the PID and LQR baselines on the same rate gains, then the sysid flights
-# that failed on 10-28 (pos excitation needs the sysid_u firmware; vel-z needs highdtsPID.Des logged).
+# that failed on 10-28 (pos excitation needs the sysid_u firmware; vel-z never excited, same silent refusal).
 # Every pass threshold below is PROPOSED unless cited to a measured log.
 
 day: 2026-10-28
@@ -100,7 +100,7 @@ flights:
   - id: vel-sysid-z
     camera_mode: 0  # record tracking; disable camera corrections for identification
     fly: lab_d_sysid_vel_z
-    why: "Vertical velocity sysid (`sysid_target=3`, `axis=z`): 0.15-3 Hz multisine at 0.25 m/s on `highdtsPID.Des`; 10-28 #15 had no coherent bins and no highdtsPID.Des in the log"
+    why: "Vertical velocity sysid (`sysid_target=3`, `axis=z`): 0.15-3 Hz multisine at 0.25 m/s on `Ctrler.Z_ratePID.Des`; on 10-28 #15 the excitation never ran (silent SysID_Start refusal, sysid_state not streamed)"
     pass: "excite completes keeping altitude within [0.25, 0.85] m; `python -m ground_station.autotune.cli <session> --loop vel --axis z` fits with residual <= 0.35 (PROPOSED)"
     tune: {kind: pid, loop: vel, axes: [z], from: [vel-sysid-z]}
 
