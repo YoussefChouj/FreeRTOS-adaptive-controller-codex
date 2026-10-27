@@ -1,0 +1,27 @@
+{
+  "base": "rate35y104",
+  "why": "CF A/B 2026-10-27: old CF emulation (tick median, legacy). Z_pos Ki 0.005 (operator: original Ki for all flights). Every CF flag pinned so no manual VAR_WRITE: sample mode 0, delay 0, spread 0, disarmed test 0, rate mode 0. Same PID gains in both files; only g_alt_tof_sample_mode differs. RAM only, written disarmed by fly.",
+  "values": {
+    "9": 3.5,
+    "10": 0.01,
+    "11": 13.0,
+    "12": 3.5,
+    "13": 0.01,
+    "14": 13.0,
+    "15": 10.4,
+    "16": 0.005,
+    "17": 0.014,
+    "22": 0.005,
+    "18": 400.0,
+    "19": 0.435,
+    "20": 0.0,
+    "21": 0.7,
+    "23": 0.1,
+    "g_alt_vz_mode": 1,
+    "g_alt_cf_rate_mode": 0,
+    "g_alt_tof_sample_mode": 0,
+    "g_alt_tof_delay_ticks": 0,
+    "g_alt_cf_spread_mode": 0,
+    "g_alt_cf_disarmed_test": 0
+  }
+}

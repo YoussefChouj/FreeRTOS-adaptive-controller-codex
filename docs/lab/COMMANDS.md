@@ -157,8 +157,8 @@ card has no new flags, body-acceleration fields or disarmed hand-test capability
 
 CF correction-rate ABBA experiment (PROPOSED): after the reviewed firmware is flashed and
 verified, copy the two preset sources next to the saved day gains. The copies preserve the
-saved attitude gains and explicitly set the measured Z position PID to 0.7/0.001/0.1 and
-velocity PID to 400/0.435/0. The variants differ only in `g_alt_cf_rate_mode` (legacy versus
+saved attitude gains and explicitly set the Z position PID to 0.7/0.005/0.1 (Ki back to the
+original 0.005 on 2026-10-27, operator) and velocity PID to 400/0.435/0. The variants differ only in `g_alt_cf_rate_mode` (legacy versus
 rate-scaled); both select CF velocity feedback. Source PID defaults are unchanged.
 
 ```powershell
@@ -174,6 +174,19 @@ Copy-Item docs/lab/gains/2026-10-27-cf-rate-scaled.json logs/lab/2026-10-27/
 # cf-legacy-hover-repeat (A)
 .\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-legacy.json
 ```
+
+**ToF sample-mode A/B (needs main 19dde9dd or later flashed), one command, no manual writes:**
+
+```powershell
+.\cfab --dry-run   # prints the 4 plans; nothing flies
+.\cfab             # flights 1-4: sample mode 0, 1, 1, 0; RC arm starts each flight
+```
+
+`cfab.cmd` runs `.\fly lab_z_cf_hover --once` four times. Each flight loads
+`logs/lab/2026-10-27/2026-10-27-cf-ki005-mode0.json` or `...-mode1.json`. The two files are
+identical (Ki 0.005, CF velocity, rate mode 0, delay 0, spread 0, hand test 0) except row 60
+`g_alt_tof_sample_mode` (0 = old tick median, 1 = fixed per-sample median). A failed flight stops
+the chain.
 
 These descriptive names label the ABBA sequence; standalone recordings retain campaign
 name `z-cf-hover` with unique session timestamps. Record which session belongs to each label.
