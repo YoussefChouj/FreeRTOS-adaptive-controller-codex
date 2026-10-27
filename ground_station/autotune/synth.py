@@ -22,6 +22,7 @@ import pandas as pd
 
 from ground_station.autotune import excitation as ex
 from ground_station.autotune.design import Plant, PidRow, read_pid_rows
+from ground_station.autotune.frf import SYSID_U
 from ground_station.autotune.frf import ANGLE_PID, RATE_PID, loop_dt, pid_member
 
 DEMO_PLANT = Plant(k=8.5, tau_s=0.03, delay_s=0.01)  # made up for the demo, near research/sim/cascade.py tests
@@ -131,6 +132,8 @@ def simulate_loop(loop: str, axis: str, plant: Plant, pid_row: PidRow | None = N
     prim = np.where(t < 1.0, 1.0, 2.0)
     cols = {"xTickCount": tick_ms, f"Ctrler.{member}.Des": log[:, 0], f"Ctrler.{member}.FB": log[:, 1],
             "g_wfb_status.prim_state": prim}
+    if loop == "pos":   # firmware target 4 takes the excitation off Des within the tick and logs it as sysid_u
+        cols[f"Ctrler.{member}.Des"], cols[SYSID_U] = log[:, 0] - d, d
     frames = [pd.DataFrame({"received_ns": host_ns, "slot": 0, "key": f"slot0.{key}", "value": val})
               for key, val in cols.items()]
     return pd.concat(frames).sort_values("received_ns", kind="stable")
