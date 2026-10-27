@@ -275,15 +275,19 @@ class Term:
 
 
 KEY_ROUTES = {"s": "/api/campaign/stop", "n": "/api/campaign/next", "l": "/api/campaign/land"}
+KEY_MEANING = {"s": "end the step, hold the hover point (n next step, l land)", "n": "next step", "l": "land"}
+# 10-28 LQR flights: the operator mashed Ctrl+C 7-15 times in one burst; every press after the first was an abort.
+# Presses closer than this to the previous one are the same press: land once, abort only on a deliberate second press.
+CTRL_C_BURST_S = 2.0
 
 
 def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None, post_takeoff_gains=None):
     """Flight view until the runner stops running: (last campaign state, live samples). Phase changes are events,
     the live line updates every live_s and each fresh read is kept as a sample {t, <TEL_NAMES>} for the debrief.
-    Keys s/n/l post stop/next/land, p calls on_pj; Ctrl+C lands, a second Ctrl+C aborts. While the service is down
+    Keys s/n/l post stop/next/land, p calls on_pj; Ctrl+C lands, a second Ctrl+C (after CTRL_C_BURST_S quiet) aborts. While the service is down
     Ctrl+C returns ({"status": "service_down"}, samples) instead."""
     term, key = term or Term(), key or _key
-    last, stops, st, samples, t_state, t_down = None, 0, {}, [], -math.inf, None
+    last, stops, st, samples, t_state, t_down, t_ctrl_c = None, 0, {}, [], -math.inf, None, -math.inf
     t0 = _clock()
     applied_post_takeoff = False
     while True:
@@ -291,7 +295,7 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None, post
             k = key()
             if k in KEY_ROUTES:
                 code, res = call(base, KEY_ROUTES[k], {})
-                term.event(f"key {k} -> {KEY_ROUTES[k]}: {code} {res.get('error', '')}".rstrip())
+                term.event(f"key {k} ({KEY_MEANING[k]}) -> {KEY_ROUTES[k]}: {code} {res.get('error', '')}".rstrip())
                 events.log("key", key=k, route=KEY_ROUTES[k], code=code, error=res.get("error"))
             elif k == "p":
                 term.event(on_pj() if on_pj else "PlotJuggler: not wired here")
@@ -335,6 +339,12 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None, post
                 term.event("Ctrl+C: service down, leaving fly. Run fly again (it restarts the service).")
                 term.close()
                 return {"status": "service_down"}, samples
+            burst, t_ctrl_c = _clock() - t_ctrl_c < CTRL_C_BURST_S, _clock()
+            if burst:
+                events.log("key", key="ctrl+c", route=None, burst=True)
+                term.event(f"Ctrl+C: {'landing' if stops == 1 else 'abort'} already requested "
+                           f"(press again after {CTRL_C_BURST_S:g} s quiet to abort)")
+                continue
             route = "/api/campaign/land" if stops == 0 else "/api/campaign/abort"
             stops += 1
             events.log("key", key="ctrl+c", route=route)

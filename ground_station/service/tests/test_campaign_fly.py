@@ -355,12 +355,21 @@ class Flight(Rig):
 
 
 def test_watch_keys_post_their_routes_and_ctrl_c_lands_then_aborts(monkeypatch):
-    rig = Flight(monkeypatch, keys=["s", "n", "l"], interrupt_at=[1.0, 1.5])
+    # 1.0-1.4 is one panic burst (one land); 3.6 is a deliberate second press after 2 s quiet (abort).
+    rig = Flight(monkeypatch, keys=["s", "n", "l"], interrupt_at=[1.0, 1.2, 1.4, 3.6], run_s=6.0)
     rig.go_t = 0.0
     st, samples = campaign_fly.watch("http://h")
     assert [r for r, _ in rig.calls] == ["/api/campaign/stop", "/api/campaign/next", "/api/campaign/land",
                                          "/api/campaign/land", "/api/campaign/abort"]
     assert st["status"] == "done" and len(samples) >= 10 and samples[0]["g_wfb_status.prim_state"] == 2
+
+
+def test_watch_a_ctrl_c_burst_lands_once_and_never_aborts(monkeypatch):
+    # 10-28 flight 29: 15 presses within a second; each after the first posted abort.
+    rig = Flight(monkeypatch, interrupt_at=[1.0 + 0.1 * i for i in range(15)], run_s=4.0)
+    rig.go_t = 0.0
+    campaign_fly.watch("http://h")
+    assert [r for r, _ in rig.calls if r in ("/api/campaign/land", "/api/campaign/abort")] == ["/api/campaign/land"]
 
 
 def test_fly_loop_once_goes_on_the_arm_and_files_the_flight(tmp_path, monkeypatch):

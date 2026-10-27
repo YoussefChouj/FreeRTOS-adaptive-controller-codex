@@ -505,6 +505,10 @@ Re-measure when the phone, zoom, scrcpy size or tracker read path changes.
 .\fly lab_m_memory_u100 --once --gains c3  # write a gain preset to RAM (stop-and-wait) before the flight
 ```
 
+- Keys in flight: `s` ends the step and holds the hover point (`n` next step, `l` land); `n` next step; `l` land;
+  `p` PlotJuggler. **Ctrl+C lands.** Presses less than 2 s apart are one press, so mashing it lands once; a press
+  after 2 s quiet aborts (it lands the same way, the report says `operator abort`). Under `labday` the deck
+  survives the burst and goes on to the next card (2026-10-28).
 - Pack swap mid-day: power off, swap, power on. `fly` sees the link go quiet for 3 s, waits for it to come back,
   then asks for the pack type.
 - The pack gate predicts the pack % at the end of the flight and refuses below 30%. Only the operator may change

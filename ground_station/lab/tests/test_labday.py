@@ -408,6 +408,35 @@ def test_fly_ctrl_c_keeps_waiting_for_child(tmp_path, monkeypatch):
     assert logged[0][1]["id"] == "smoke-hover"
 
 
+def test_fly_swallows_the_ctrl_c_burst_that_outlives_the_child(tmp_path, monkeypatch):
+    # 10-28 flight 27: presses after fly exited killed the deck before the camera stop and the flight record.
+    fake = _Fake([])
+    p = _player(tmp_path, monkeypatch, fake, [{"id": "smoke-hover", "fly": "lab_c_robust"}])
+    logged, burst = [], [1, 1]
+    real_sleep = labday.time.sleep
+
+    def wait(timeout=None):
+        raise_now = not logged
+        if raise_now:
+            raise KeyboardInterrupt
+        return 0
+
+    def sleep(s):
+        if burst:
+            burst.pop()
+            raise KeyboardInterrupt
+        real_sleep(s)
+
+    monkeypatch.setattr(p, "popen", lambda *a, **kw: SimpleNamespace(pid=4242, wait=wait))
+    monkeypatch.setattr(labday, "log_offsets", lambda: {})
+    monkeypatch.setattr(labday, "CTRL_C_QUIET_S", 0.2)
+    monkeypatch.setattr(labday.time, "sleep", sleep)
+    monkeypatch.setattr(labday.events, "log", lambda event, **kw: logged.append((event, kw)))
+    rc, ev = p.fly(p.d["flights"][0], None)
+    assert rc == 0 and ev["status"] == "complete"
+    assert [kw.get("after_fly", False) for _, kw in logged] == [False, True, True]
+
+
 @pytest.mark.parametrize("error", [KeyboardInterrupt, RuntimeError])
 def test_flight_exception_stops_camera_exactly_once(tmp_path, monkeypatch, error):
     fake = _Fake([])

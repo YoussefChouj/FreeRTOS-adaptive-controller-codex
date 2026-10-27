@@ -482,6 +482,7 @@ COOLDOWN_S = 90   # PROPOSED, not measured: motor and pack rest after a landing;
 PLOT_TIMEOUT_S = 120   # PROPOSED, not measured: background per-flight plot timeout
 DRY_RUN_JOBS = 3   # parallel ground dry runs at the deck start (laptop: 4 cores, fragile AC under load)
 CAMERA_STOP_TIMEOUT_S = 40   # PROPOSED: the stop normally takes up to 20 s (comment in one()); 2x that, then kill
+CTRL_C_QUIET_S = 1.5   # labday swallows a Ctrl+C burst until this long with no press (fly lands on the first)
 
 PLOT_CAPTIONS = {
     "tracking.png": "Position, attitude, and motor tracking vs reference.",
@@ -1295,6 +1296,7 @@ class Day:
         since = log_offsets()
         child = self.popen(fly_cmd(f, pack, port=self.port, plain=not self.lab_service, no_gates=self.no_gates,
                                    gains=self.gains_arg()), cwd=ROOT)
+        pressed = False
         while True:
             try:
                 # Bounded waits let Windows deliver Ctrl+C while fly owns land/abort.
@@ -1304,7 +1306,21 @@ class Day:
                 continue
             except KeyboardInterrupt:
                 events.log("labday_ctrl_c", day=self.day, id=f["id"], pid=child.pid)
+                pressed = True
+        if pressed:   # 10-28 flight 27: the tail of a Ctrl+C burst outlived fly and killed the deck (no camera stop, no record)
+            self.drain_ctrl_c(f["id"])
         return rc, debrief_event(child.pid, since)
+
+    def drain_ctrl_c(self, fid, quiet_s=None):
+        """Swallow the rest of a Ctrl+C burst after the fly child exits, until quiet_s pass with no press."""
+        quiet_s = CTRL_C_QUIET_S if quiet_s is None else quiet_s
+        t_end = time.monotonic() + quiet_s
+        while (left := t_end - time.monotonic()) > 0:
+            try:
+                time.sleep(min(0.1, left))
+            except KeyboardInterrupt:
+                events.log("labday_ctrl_c", day=self.day, id=fid, after_fly=True)
+                t_end = time.monotonic() + quiet_s
 
     def branches(self):
         if self.d["branches"]:
