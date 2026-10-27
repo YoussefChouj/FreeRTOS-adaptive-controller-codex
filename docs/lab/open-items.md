@@ -175,3 +175,9 @@ D7  sysid model quality (fit, validation, residual whiteness); refit if weak; si
 D8  high-speed drift not recovered + tight vs wide figure-8 (tilt/accel/thrust saturation check).
 D9  firmware + pipeline review: bugs and no-behaviour-change improvements (VPS review -> Jules/CEO fixes).
 D10 10-22 deck + fake-drone soak + briefing artifact (plots, evidence, checks, theory, six skills).
+
+## 2026-10-27 cfab hover logs (after the campaign)
+- Z_pos Kd has no effect: PID is per tick with no dt, so Kd 0.1 at 100 Hz is 0.001 s (Ud std ~0.0002 vs Up ~0.04). Make Kd/Ki dt-aware or retune in per-second units (firmware).
+- CF fuses repeated ToF frames (staircase in h, ~68 Hz updates): fuse only on a new sensor value.
+- CF b_az carries across arms and wanders ~0.2 m/s2 within a flight: seed b_az at arm.
+- xy/roll sway grows over a 30 s hover (roll std 0.5 -> 1.0 deg), x-z coherence 0.2-0.4: check optical-flow height scaling vs the height swing after the Z damping fix.
